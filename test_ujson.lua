@@ -5,9 +5,6 @@ function test(msg, ...)
 end
 
 p = ujson:new({
-    error = function(p, error)
-        print("Error: " .. error)
-    end,
     begin_element = function(p, path, key, type)
         return true
     end,
@@ -23,6 +20,9 @@ p = ujson:new({
     end,
     done = function(p)
         print("Done")
+    end,
+    error = function(p, error)
+        print("Error: " .. error)
     end
 })
 

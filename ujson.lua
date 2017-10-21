@@ -8,9 +8,9 @@
     
     local ujson = require("ujson")
     
-    Then create an instance using ujson:new() passing a dictionary of parsing event handlers:
+    Then create an instance using ujson:new() passing a dictionary of parsing event handlers and max_string_len (see below):
     
-        - 'element' = function(p, path, key, value)
+        - 'element' = function(p, path, key, value, truncated)
             
             Called for every simple value (true, false, null, numbers and strings). 
             The `key` parameter is either a string key for this value in the enclosing dictionary 
@@ -26,6 +26,8 @@
                 "root", 2, "test2".
                 
             You can can call p:string_for_path(path) to get a string representation of the path suitable for logging.
+            
+            For string values 'truncated' tells if the string was actually larger than `max_string_len` passed into the new() method.
         
         - 'begin_element' = function(p, path, key, type)
         - 'end_element' = function(p, path)
@@ -52,7 +54,7 @@
     The `finish` method should be called after all the data is fed. An error will be triggered if there is not enough data 
     in the incoming stream to complete the document.
 ]]--
-local ujson = {
+return {
     
     new = function(self, handlers)        
         o = {}
@@ -62,32 +64,38 @@ local ujson = {
         return o
     end,
     
-    _begin = function(self, handlers)
+    _begin = function(self, handlers, max_string_len)
         self.handlers = handlers
         -- The state of the parser.
         self.state = 'idle'
         -- Parser's stack (each character is an item) to remember if we are handling an array or a dictionary.
         self.stack = ''
-        -- The current key path array, such as { "key1", 12, "key2" }, where every string elements represents a dictionary key 
-        -- and a number element represents an index in an array.
+        -- The current key path array, such as { "key1", 12, "key2" }, where every string elements represents a
+        -- dictionary key and a number element represents an index in an array.
         self.path = {}
         -- The state of the tokenizer.
         self.token_state = 'space'
-        -- Global position in the incoming data, used only to report errors. TODO: perhaps not very useful and should be removed.
+        -- Global position in the incoming data, used only to report errors. 
+        -- TODO: perhaps not very useful and should be removed.
         self.position = 0
+        self.max_token_len = 64
+        self.max_string_len = max_string_len or 256
     end,
     
     _cleanup = function(self)
         self.handlers = nil
         self.stack = nil
+        self.state = nil
         self.token_state = 'done'
         self.token_substate = nil
         self.token_value = nil
     end,
     
+    --[[
     _trace = function(self, s, ...)
         print(string.format("ujson: " .. s, ...))
     end,
+    ]]--
     
     -- For the fiven document path returns a string suitable for diagnostics, 
     -- e.g. "root[2][\"test2\"]" for the example above.
@@ -109,7 +117,7 @@ local ujson = {
     
     _begin_element = function(self, key, type)
         table.insert(self.path, key)
-        -- self:_trace("%s begin %q", self:string_for_path(path), type)
+        -- self:_trace("%s begin %q", self:string_for_path(self.path), type)
         if self.handlers.begin_element then
             return self.handlers.begin_element(self, self.path, key, type)
         else
@@ -117,18 +125,16 @@ local ujson = {
         end
     end,
     
-    _element = function(self, key, value)
+    _element = function(self, key, value, truncated)
         table.insert(self.path, key)
-        -- self:_trace("%s %q -> '%s' (%s)", self:string_for_path(path), key, value, type(value))
-        local result = self.handlers.element(self, self.path, key, value)        
+        -- self:_trace("%s %q -> '%s' (%s)", self:string_for_path(self.path), key, value, type(value))
+        local result = self.handlers.element(self, self.path, key, value, truncated)
         table.remove(self.path)
         return result
     end,
     
     _end_element = function(self)
-        
-        -- self:_trace("%s end", self:string_for_path(path))
-        
+        -- self:_trace("%s end", self:string_for_path(self.path))
         local result
         if self.handlers.end_element then
             result = self.handlers.end_element(self, self.path)
@@ -136,12 +142,14 @@ local ujson = {
             result = true
         end
         
-        table.remove(self.path, key)
+        self.current_key = self.path[#self.path]
+        table.remove(self.path)
+        
         return result
     end,
     
     _fail = function(self, msg, ...)
-        if self.state ~= 'done' then
+        if self.token_state ~= 'done' then
             -- self:_trace("failed: " .. msg, ...)
             self.handlers.error(self, string.format(msg, ...))
             self:_cleanup()
@@ -149,8 +157,7 @@ local ujson = {
     end,
     
     _done = function(self)
-        if self.state ~= 'done' then
-            self.state = 'done'
+        if self.token_state ~= 'done' then
             -- self:_trace("done")
             self.handlers.done(self)
             self:_cleanup()
@@ -160,7 +167,6 @@ local ujson = {
     _pop_state = function(self)
         
         if self.stack:len() == 0 then
-            assert(false)
             return self:_fail("invalid parser state")
         end
         
@@ -227,7 +233,7 @@ local ujson = {
                 else
                     self.state = 'array-comma'
                 end
-                self:_element(self.current_key, token_value)
+                self:_element(self.current_key, token_value, self.truncated)
             elseif token_type == '[' then
                 self.stack = self.stack .. 'A'
                 self.state = 'array-element'
@@ -242,10 +248,10 @@ local ujson = {
                     return self:_fail("begin_element handler has failed")
                 end
             elseif token_type == ']' and self.state == 'array-element' then
-                if not self:_pop_state() then return false end
                 if not self:_end_element() then 
                     return self:_fail("end_element handler has failed") 
                 end
+                if not self:_pop_state() then return false end
             else
                 return self:_fail("expected a value, but got '%s'", token_type)
             end
@@ -253,10 +259,10 @@ local ujson = {
             if token_type == ',' then
                 self.state = 'array-element'
             elseif token_type == ']' then
-                if not self:_pop_state() then return false end
                 if not self:_end_element() then 
                     return self:_fail("end_element handler has failed") 
                 end
+                if not self:_pop_state() then return false end
             else
                 return self:_fail("expected a comma or end of array, but got '%s'", token_type)
             end
@@ -264,13 +270,12 @@ local ujson = {
             if token_type == ',' then
                 self.state = 'dict-key'
             elseif token_type == '}' then
-                if not self:_pop_state() then return false end
                 if not self:_end_element() then
                     return self:_fail("_end_object() failed")
                 end
+                if not self:_pop_state() then return false end
             end
         else
-            assert(false)
             return self:_fail("invalid parser state: '%s'", self.state)
         end
         
@@ -291,11 +296,11 @@ local ujson = {
             if ch == '0' then
                 -- Leading zero, expect a dot or the end of token afterwards.
                 self.token_substate = 'dot'
-                self.token_value = self.token_value .. ch
+                if not self:_append_token_value(ch) then return false end
             elseif string.find("123456789", ch, 1, true) then
                 -- Non-zero digit, any digit or dot can follow.
                 self.token_substate = 'digit'
-                self.token_value = self.token_value .. ch                
+                if not self:_append_token_value(ch) then return false end                
             else
                 -- Something else, let's fail because we have only a minus so far.
                 return self:_fail("unexpected character in a number at %d", self.position + i)
@@ -306,7 +311,7 @@ local ujson = {
             -- After a leading zero now, expecting a dot or the end of the token here.
             if ch == '.' then
                 self.token_substate = 'fraction-digit'
-                self.token_value = self.token_value .. ch
+                if not self:_append_token_value(ch) then return false end                
             else
                 return self:_process_number_token(), true
             end
@@ -315,14 +320,14 @@ local ujson = {
             
             -- Digits before the dot.
             if string.find("0123456789", ch, 1, true) then
-                self.token_value = self.token_value .. ch
+                if not self:_append_token_value(ch) then return false end                
             elseif ch == 'e' or ch == 'E' then
                 -- Exponent in a number without the fractional part
                 self.token_substate = 'exp-sign'
-                self.token_value = self.token_value .. ch
+                if not self:_append_token_value(ch) then return false end                
             elseif ch == '.' then
                 self.token_substate = 'fraction-digit'
-                self.token_value = self.token_value .. ch
+                if not self:_append_token_value(ch) then return false end                
             else
                 return self:_process_number_token(), true
             end
@@ -331,10 +336,10 @@ local ujson = {
             
             -- Digits after the dot.
             if string.find("0123456789", ch, 1, true) then
-                self.token_value = self.token_value .. ch
+                if not self:_append_token_value(ch) then return false end                
             elseif ch == 'e' or ch == 'E' then
                 self.token_substate = 'exp-sign'
-                self.token_value = self.token_value .. ch
+                if not self:_append_token_value(ch) then return false end                
             else
                 return self:_process_number_token(), true
             end
@@ -343,7 +348,7 @@ local ujson = {
             
             if ch == '-' or ch == '+' then
                 self.token_substate = 'exp'
-                self.token_value = self.token_value .. ch
+                if not self:_append_token_value(ch) then return false end                
             else
                 -- Got something different from plus or minus, let's reevaluate the current character.
                 self.token_substate = 'exp'
@@ -353,19 +358,36 @@ local ujson = {
         elseif self.token_substate == 'exp' then
             
             if string.find("0123456789", ch, 1, true) then
-                self.token_value = self.token_value .. ch
+                if not self:_append_token_value(ch) then return false end                
             else
                 return self:_process_number_token(), true
             end
             
         else
-            assert(false)
-            return self:_fail("unexpected parser state")
+            return self:_fail("wrong parser state")
         end
         
         return true
     end,
     
+    _append_token_value = function(self, ch)
+        if self.token_value:len() < self.max_token_len then
+            self.token_value = self.token_value .. ch
+            return true
+        else
+            return self:_fail("a token is too large")
+        end
+    end,
+    
+    _append_string_token_value = function(self, ch)
+        if self.token_value:len() < self.max_string_len then
+            self.token_value = self.token_value .. ch
+        else
+            self.truncated = true      
+        end
+        return true
+    end,
+        
     -- Called for every chunk of the data to be parsed. 
     -- Returns false, if the parsing has failed and no more data should be fed.
     process = function(self, data)
@@ -387,6 +409,7 @@ local ujson = {
                     self.token_state = 'string'
                     self.token_value = ""
                     self.token_substate = 'char'
+                    self.truncated = false
                 elseif string.find("-0123456789", ch, 1, true) then
                     -- Looks like start of a number.
                     self.token_state = 'number'
@@ -417,7 +440,6 @@ local ujson = {
                     return self:_fail(string.format("invalid token at %d", self.position + i))
                 end
             elseif self.token_state == 'string' then
-                
                 if self.token_substate == 'char' then
                     if ch == '"' then
                         if not self:_process_token('string', self.token_value) then return false end
@@ -425,13 +447,13 @@ local ujson = {
                     elseif ch == '\\' then
                         self.token_substate = 'escape-char'
                     else
-                        self.token_value = self.token_value .. ch
+                        if not self:_append_string_token_value(ch) then return false end
                         -- TODO: check if the string is too long
                     end
                 elseif self.token_substate == 'escape-char' then    
-                    local p = string.find("\\/bfnrt", ch, 1, true)
+                    local p = string.find("\"\\/bfnrt", ch, 1, true)
                     if p then 
-                        self.token_value = self.token_value .. string.sub("\\/\b\f\n\r\t", p, p)
+                        if not self:_append_string_token_value(string.sub("\"\\/\b\f\n\r\t", p, p)) then return false end
                         self.token_substate = 'char'
                     elseif ch == 'u' then
                         self.token_substate = 'unicode'
@@ -464,7 +486,7 @@ local ujson = {
                             else
                                 assert(false)
                             end
-                            self.token_value = self.token_value .. utf8
+                            if not self:_append_string_token_value(utf8) then return false end
                         end
                     else
                         return self:_fail("expected a hex digit at %d", self.position + i)
@@ -472,7 +494,6 @@ local ujson = {
                 else
                     assert(false)
                 end
-
             elseif self.token_state == 'number' then
                 local succeeded
                 succeeded, reevaluate = self:_handle_number(ch)
@@ -504,13 +525,10 @@ local ujson = {
     -- Should be called when no more data is available. 
     -- The parser will verify that the end of the root object has been received.
     finish = function(self, data)
-        if self.state == 'done' then
+        if self.token_state == 'done' then
             return true
         else
             return self:_fail("the document is incomplete")
         end
     end
 }
-
-return ujson
-

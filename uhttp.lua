@@ -146,7 +146,7 @@ local parser = {
                 return self:_fail("Invalid status line")
             end
             
-            if not self:_process_status(code, phrase) then return false end
+            if not self:_process_status(tonumber(code), phrase) then return false end
             
             self.state = 'header'
             
@@ -238,7 +238,7 @@ local parser = {
 --[[
     Streaming HTTP request based on uhttp:parser and net:socket modules.
     'Streaming' means that the whole response does not have to be held in memory before it is given to the user of the module.
-    
+    NOTE: this is not complete yet.
 ]]--
 local request = {
         
@@ -254,45 +254,96 @@ local request = {
     end,
         
     _cleanup = function(self)
+        
         if self.socket == nil then return end
-            
+                    
         self.socket:close()
         self.socket = nil
         
+        self.handlers = nil
+        
         self.parser = nil
 
-        self:_trace("Cleaned up")
+        -- self:_trace("Cleaned up")
     end,
     
     cancel = function(self)
         self:_cleanup()
     end,
     
-    _error = function(self)
-        -- TODO: Call the event handle
-        if self.clean then
-            self:_trace("Error: %s", error)
+    _error = function(self, message)
+        if self.socket then
+            self:_trace("error: %s", message)
+            self.handlers.error(self, message)
             self:_cleanup()
         end
     end,
     
-    fetch = function(self, host, path, port)
-        
-        self.parser = parser:new({
+    _done = function(self)
+        if self.socket then
+            self:_trace("Done")
+            self.handlers.done(self)
+            self:_cleanup()
+        end        
+    end,
+    
+    download = function(self, host, path, port, filename, completed)
+        local f = file.open(filename, "w")
+        if not f then
+            completed(false, "could not open the file")
+            return
+        end
+        self:fetch(host, path, port, {
             status = function(p, code, phrase)
-                self:_trace("Status: %d '%s'", code, phrase)
-                return true
+                if code == 200 then
+                    return true
+                else
+                    self:_trace("Expected %d", code)
+                    return false
+                end
             end,
             header = function(p, name, value)
-                self:_trace("Header: '%s': '%s'", name, value)
                 return true
             end,
             body = function(p, data)
-                -- self:_trace("Body: '%s'", data)
-                return true
+                if f:write(data) then
+                    return true
+                else
+                    -- Because write() returns nil instead of false.
+                    return false
+                end
             end,
             done = function(p)
-                self:_trace("Done")
+                f:close()
+                completed(true)
+            end,
+            error = function(p, error)
+                f:close()
+                self:_error(error)
+                completed(false, error)
+            end
+        })
+    end,
+    
+    fetch = function(self, host, path, port, handlers)
+        
+        self.handlers = handlers
+        
+        self.parser = parser:new({
+            status = function(p, code, phrase)
+                -- self:_trace("Status: %d '%s'", code, phrase)
+                return self.handlers.status(self, code, phrase)
+            end,
+            header = function(p, name, value)
+                --self:_trace("Header: '%s': '%s'", name, value)
+                return self.handlers.header(self, name, value)
+            end,
+            body = function(p, data)
+                -- self:_trace("Body: '%s'", data)
+                return self.handlers.body(self, data)
+            end,
+            done = function(p)
+                self:_done()
             end,
             error = function(p, error)
                 self:_error(error)
@@ -316,8 +367,12 @@ local request = {
             self:_trace("Received %d byte(s)", data:len())
             self.parser:process(data)
         end)
-        self.socket:on("disconnection", function(sck)
-            self:_trace("Disconnected")
+        self.socket:on("disconnection", function(sck, error)
+            if error then
+                self:_trace("Disconnected with error: %s", error)
+            else
+                self:_trace("Disconnected cleanly")
+            end
             self.parser:finish()
         end)
         

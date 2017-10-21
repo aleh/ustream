@@ -18,7 +18,7 @@ local parser = uhttp.parser:new({
     end,
     error = function(p, error)
         print(string.format("Error: %s", error))
-    end,
+    end
 })
 parser:process("HTTP/1.1")
 parser:process(" 200 OK\r\n")
