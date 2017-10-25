@@ -4,234 +4,234 @@
 --[[
     Simple streaming parser for HTTP responses. 
     
-    First create an instance using parser:new() with a dictionary of event handlers, 
+    First create an instance by calling `parser.new()` with a dictionary of event handlers, 
     then call process() on that instance for every chunk of data coming from the network,
     and then finish() when the connection is closed.
+        
+    The dictionary of handlers must contain the following functions:
+    
+    - status = function(p, code, phrase)
+        Called once when the status line is parsed.
+        
+    - header = function(p, name, value)
+        Called after status and before the body for every header.
+        
+    - body = function(p, data)
+        Called zero or more times for every chunk of the body data.
+        
+    - done = function(p, leftover) 
+        Called once after the body has been received successfully, nothing is called afterwards. 
+        The `leftover` parmeter contains unparsed data from the last call to process().
+        
+    - error = function(p, error)
+        Called once after an error, nothing is called afterwards.
+        
+    The status(), header() and body() callbacks must return `true` in order to continue the parsing.        
 ]]--
-local parser = {
+local uhttp_parser = {
 
-    --[[ 
-        Resests the state of the parser, so it's ready for new data. 
+    new = function(handlers)
         
-        The dictionary of handlers must contain the following functions:
+        local handlers_status = handlers.status
+        local handlers_header = handlers.header
+        local handlers_body = handlers.body
+        local handlers_done = handlers.done
+        local handlers_error = handlers.error
         
-        - status = function(p, code, phrase)
-            Called once when the status line is parsed.
+        local line = ""
+        local line_state = 'before-lf'
+        local state = 'status-line'
+        local content_length = -1
+        local actual_content_length = 0
+        local body_left_over = nil
             
-        - header = function(p, name, value)
-            Called after status and before body for every header.
+        local _cleanup = function()
             
-        - body = function(p, data)
-            Called zero or more times for every chunk of body data.
+            handlers_status = nil
+            handlers_header = nil
+            handlers_body = nil
+            handlers_done = nil
+            handlers_error = nil
             
-        - done = function(p, leftover) 
-            Called once after the body has been received successfully, nothing is called afterwards. 
-            The `leftover` parmeter contains unparsed data from the last call to process().
-            
-        - error = function(p, error)
-            Called once after an error, nothing is called afterwards.
-            
-        The status(), header() and body() callbacks must return `true` in order to continue the parsing.
-    ]]--
-    new = function(self, handlers)
-        o = {}
-        setmetatable(o, self)
-        self.__index = self
-        o:_begin(handlers)
-        return o
-    end,
-    
-    _begin = function(self, handlers)
-        self.handlers = handlers
-        self.line = ""
-        self.line_state = 'before-lf'
-        self.state = 'status-line'
-        self.content_length = -1
-        self.actual_content_length = 0
-    end,
-    
-    _cleanup = function(self)
-        self.handlers = nil
-        self.line = nil
-        self.line_state = nil
-        self.body_left_over = nil
-        -- Mark as completed, so further calls of `process` will do nothing.
-        self.state = 'done'
-    end,
-
-    _fail = function(self, message)
-        if not self.handlers then
-            assert(false, "Working with the parser after it has finished or after an error occured?")
+            line = nil
+            line_state = nil
+            -- Mark as completed, so further calls of `process` will do nothing.
+            state = 'done'
+            body_left_over = nil
         end
-        self.handlers.error(self, message)
-        self:_cleanup()
-        return false
-    end,
-    
-    _done = function(self)
-        self.handlers.done(self, self.body_left_over)
-        self:_cleanup()
-        return true
-    end,
 
-    _append_to_line = function(self, data)
-        self.line = self.line .. data
-        if self.line:len() > 256 then
-            self:_fail("Very long line in the header")
+        local _fail = function(message)
+            handlers_error(self, message)
+            _cleanup()
             return false
-        else
+        end
+
+        local _done = function()
+            handlers_done(self, body_left_over)
+            _cleanup()
             return true
         end
-    end,
-    
-    _process_status = function(self, code, phrase)
-        if self.handlers.status(self, code, phrase) then
-            return true
-        else
-            return self:_fail("Status handler indicated error")
-        end
-    end,    
-    
-    _process_header = function(self, name, value)
-        
-        -- First let's check headers we might be interested in.
-        if name == "content-length" then
-            self.content_length = tonumber(value)
-        end
-        
-        -- Then call the handlers.
-        if self.handlers.header(self, name, value) then
-            return true
-        else
-            return self:_fail("Header handler indicated error")
-        end
-    end,
-        
-    _process_body = function(self, data)
-        
-        local actual_data = data
-        local done = false
-                
-        if self.content_length >= 0 then
-            -- How many bytes we are still ready to accept.
-            local left = self.content_length - self.actual_content_length
-            if data:len() >= left then
-                -- OK, no more, we are done after that.
-                done = true
-                actual_data = data:sub(1, left)
-                self.body_left_over = data:sub(left + 1, -1)
-            end
-        end
-            
-        self.actual_content_length = self.actual_content_length + actual_data:len()            
-        
-        if not self.handlers.body(self, actual_data) then
-            return self:_fail("Body data handler has failed")
-        end
-        
-        if done then
-            return self:_done()
-        else
-            return true
-        end
-    end,    
-    
-    _process_line = function(self)
-        
-        if self.state == 'status-line' then
-            
-            -- Status line
-            local code, phrase = self.line:match("^HTTP/1.1 (%d+) (.+)$")
-            if code == nil then
-                return self:_fail("Invalid status line")
-            end
-            
-            if not self:_process_status(tonumber(code), phrase) then return false end
-            
-            self.state = 'header'
-            
-        elseif self.state == 'header' then
-            
-            -- Headers
-            if self.line:len() == 0 then
-                self.line_state = 'body'
-                self.state = 'body'
+
+        local _append_to_line = function(data)
+            if line:len() + data:len() <= 256 then
+                line = line .. data
                 return true
             else
-                local name, value = self.line:match("^([^%c ()<>@,;:\\\"{}\255]+):%s*(.+)%s*$")
-                if name == nil then
-                    return self:_fail("Invalid header")
-                else
-                    name = name:lower()
-                    if not self:_process_header(name, value) then return false end
-                end
+                return _fail("too long line in the header")
             end
-            
-        else
-            return self:_fail("Invalid parser state")
         end
-        
-        self.line = ""
-        return true
-    end,
-    
-    -- This is fed with chunks of data coming from the socket. 
-    -- Returns false if an error was encountered, true otherwise.
-    process = function(self, data)
-        
-        -- Safeguard against the client missing 'error' event.
-        if self.state == 'done' then return false end
-        
-        local i = 1
-        local len = data:len()
-        while i <= len do
-            if self.line_state == 'before-lf' then
-                local nl_start, nl_end = data:find("\13", i, true)
-                if nl_start ~= nil then
-                    -- Got a CR, append everything before it to our line.
-                    if not self:_append_to_line(data:sub(i, nl_start - 1)) then return false end
-                    self.line_state = 'lf'
-                    i = nl_start + 1
-                else
-                    -- No CR till the end of the current data, let's append everything for now and be done with it.
-                    return self:_append_to_line(data:sub(i, len))
-                end
-            elseif self.line_state == 'lf' then
-                if data:byte(i) == 10 then
-                    -- OK, got an LF, let's simply eat it and process what we have got so far.
-                    self.line_state = 'before-lf'
-                    i = i + 1
-                    if not self:_process_line() then return false end
-                else
-                    -- No LF, let's be strict.
-                    return self:_fail("Missing an LF after a CR")
-                end
-            elseif self.line_state == 'body' then
-                return self:_process_body(data:sub(i, len))
+
+        local _process_status = function(code, phrase)
+            if handlers_status(self, code, phrase) then
+                return true
             else
-                return self:_fail("Invalid line state")
+                return _fail("status handler has failed")
             end
         end
-        
-        return true
-    end,
+
+        local _process_header = function(name, value)
     
-    -- Called when a corresponding connection is closed. Will fail if not everything has been received. 
-    finish = function(self)
-        
-        if self.state == 'done' then return true end
-        
-        if self.state ~= 'body' then
-            return self:_fail("Connection closed before got to the body")
+            -- First let's check headers we might be interested in.
+            if name == "content-length" then
+                content_length = tonumber(value)
+            end
+    
+            -- Then call the handlers.
+            if handlers_header(self, name, value) then
+                return true
+            else
+                return _fail("header handler has failed")
+            end
         end
+    
+        local _process_body = function(data)
+    
+            local actual_data = data
+            local done = false
+            
+            if content_length >= 0 then
+                -- How many bytes we are still ready to accept.
+                local left = content_length - actual_content_length
+                if data:len() >= left then
+                    -- OK, no more, we are done after that.
+                    done = true
+                    actual_data = data:sub(1, left)
+                    body_left_over = data:sub(left + 1, -1)
+                end
+            end
         
-        if self.content_length >= 0 and self.content_length ~= self.actual_body_length then
-            return self:_fail("Connection closed before the body was received completely")
+            actual_content_length = actual_content_length + actual_data:len()            
+    
+            if not handlers_body(self, actual_data) then
+                return _fail("body handler has failed")
+            end
+    
+            if done then
+                return _done()
+            else
+                return true
+            end
+        end  
+
+        local _process_line = function()
+    
+            if state == 'status-line' then
+        
+                -- Status line
+                local code, phrase = line:match("^HTTP/1.1 (%d+) (.+)$")
+                if code == nil then
+                    return _fail("Invalid status line")
+                end
+        
+                if not _process_status(tonumber(code), phrase) then return false end
+        
+                state = 'header'
+        
+            elseif state == 'header' then
+        
+                -- Headers
+                if line:len() == 0 then
+                    line_state = 'body'
+                    state = 'body'
+                    return true
+                else
+                    local name, value = line:match("^([^%c ()<>@,;:\\\"{}\255]+):%s*(.+)%s*$")
+                    if name == nil then
+                        return _fail("Invalid header")
+                    else
+                        name = name:lower()
+                        if not _process_header(name, value) then return false end
+                    end
+                end
+        
+            else
+                return _fail("Invalid parser state")
+            end
+    
+            line = ""
+            return true
         end
-        
-        self.body_left_over = ''
-        
-        return self:_done()
+
+        -- This is fed with chunks of data coming from the socket. 
+        -- Returns false if an error was encountered, true otherwise.
+        process = function(_self, data)
+            
+            -- Safeguard against the client missing 'error' event.
+            if state == 'done' then return false end
+            
+            local i = 1
+            local len = data:len()
+            while i <= len do
+                if line_state == 'before-lf' then
+                    local nl_start, nl_end = data:find("\13", i, true)
+                    if nl_start ~= nil then
+                        -- Got a CR, append everything before it to our line.
+                        if not _append_to_line(data:sub(i, nl_start - 1)) then return false end
+                        line_state = 'lf'
+                        i = nl_start + 1
+                    else
+                        -- No CR till the end of the current data, let's append everything for now and be done with it.
+                        return _append_to_line(data:sub(i, len))
+                    end
+                elseif line_state == 'lf' then
+                    if data:byte(i) == 10 then
+                        -- OK, got an LF, let's simply eat it and process what we have got so far.
+                        line_state = 'before-lf'
+                        i = i + 1
+                        if not _process_line() then return false end
+                    else
+                        -- No LF, let's be strict.
+                        return _fail("Missing an LF after a CR")
+                    end
+                elseif line_state == 'body' then
+                    return _process_body(data:sub(i, len))
+                else
+                    return _fail("Invalid line state")
+                end
+            end
+    
+            return true
+        end
+
+        -- Called when a corresponding connection is closed. Will fail if not everything has been received. 
+        finish = function(_self)
+                
+            if state == 'done' then return true end
+    
+            if state ~= 'body' then
+                return _fail("Connection closed before got to the body")
+            end
+    
+            if content_length >= 0 and content_length ~= actual_body_length then
+                return _fail("Connection closed before the body was received completely")
+            end
+    
+            body_left_over = ''
+    
+            return _done()
+        end
+                
+        return { process = process, finish = finish }
     end
 }
 
@@ -242,146 +242,150 @@ local parser = {
 ]]--
 local request = {
         
-    new = function(self)
-        o = {}
-        setmetatable(o, self)
-        self.__index = self
-        return o
-    end,
+    new = function()
+        
+        local socket, handlers, parser
     
-    _trace = function(self, s, ...)
-        print(string.format("uhttp: " .. s, unpack(arg)))
-    end,
-        
-    _cleanup = function(self)
-        
-        if self.socket == nil then return end
-                    
-        self.socket:close()
-        self.socket = nil
-        
-        self.handlers = nil
-        
-        self.parser = nil
-
-        -- self:_trace("Cleaned up")
-    end,
-    
-    cancel = function(self)
-        self:_cleanup()
-    end,
-    
-    _error = function(self, message)
-        if self.socket then
-            self:_trace("error: %s", message)
-            self.handlers.error(self, message)
-            self:_cleanup()
+        local _trace = function(s, ...)
+            print(string.format("uhttp: " .. s, ...))
         end
-    end,
-    
-    _done = function(self)
-        if self.socket then
-            self:_trace("Done")
-            self.handlers.done(self)
-            self:_cleanup()
-        end        
-    end,
-    
-    download = function(self, host, path, port, filename, completed)
-        local f = file.open(filename, "w")
-        if not f then
-            completed(false, "could not open the file")
-            return
+        
+        local _cleanup = function()        
+            if socket then
+                socket:close()
+                socket = nil
+        
+                handlers = nil
+        
+                parser = nil
+            end
         end
-        self:fetch(host, path, port, {
-            status = function(p, code, phrase)
-                if code == 200 then
-                    return true
-                else
-                    self:_trace("Expected %d", code)
-                    return false
+    
+        local cancel = function(self)
+            if socket then
+                socket:close()
+            end
+        end
+    
+        local _error = function(message)
+            if socket then
+                _trace("Error: %s", message)
+                handlers.error(self, message)
+                _cleanup()
+            end
+        end
+    
+        local _done = function()
+            if socket then
+                _trace("Done")
+                handlers.done(self)
+                _cleanup()
+            end        
+        end
+    
+        local fetch = function(self, host, path, port, _handlers)
+            
+            handlers = _handlers
+        
+            parser = uhttp_parser.new({
+                status = function(p, code, phrase)
+                    -- self:_trace("Status: %d '%s'", code, phrase)
+                    return handlers.status(self, code, phrase)
+                end,
+                header = function(p, name, value)
+                    --self:_trace("Header: '%s': '%s'", name, value)
+                    return handlers.header(self, name, value)
+                end,
+                body = function(p, data)
+                    -- self:_trace("Body: '%s'", data)
+                    return handlers.body(self, data)
+                end,
+                done = function(p)
+                    _done()
+                end,
+                error = function(p, error)
+                    _error(error)
                 end
-            end,
-            header = function(p, name, value)
-                return true
-            end,
-            body = function(p, data)
-                if f:write(data) then
-                    return true
+            })
+    
+            socket = net.createConnection(net.TCP, 0)
+            socket:on("connection", function(sck)
+                _trace("Sending request...")
+                sck:send(
+                    "GET " .. path .. " HTTP/1.1\r\n" ..
+                    "Host: " .. host .. "\r\n" ..
+                    "Connection: close\r\n" ..
+                    "\r\n"
+                )
+            end)
+            socket:on("sent", function(sck)
+                _trace("Sent")
+            end)
+            socket:on("receive", function(sck, data)
+                _trace("Received %d byte(s)", data:len())
+                parser:process(data)
+            end)
+            socket:on("disconnection", function(sck, error)
+                if error then
+                    _trace("Disconnected with error: %s", error)
                 else
+                    _trace("Disconnected cleanly")
+                end
+                if parser then
+                    parser:finish()
+                end
+            end)
+        
+            _trace("Connecting to %s:%d...", host, port)
+            socket:connect(port, host)
+        end
+        
+        local download = function(self, host, path, port, filename, completed)
+                        
+            local f = file.open(filename, "w")
+            if not f then
+                completed(false, "could not open the file")
+                return false
+            end
+            
+            self:fetch(host, path, port, {
+                status = function(p, code, phrase)
+                    if code == 200 then
+                        return true
+                    else
+                        _trace("Expected %d", code)
+                        return false
+                    end
+                end,
+                header = function(p, name, value)
+                    return true
+                end,
+                body = function(p, data)
                     -- Because write() returns nil instead of false.
-                    return false
+                    if f:write(data) then return true else return false end
+                end,
+                done = function(p)
+                    f:close()
+                    completed(true)
+                end,
+                error = function(p, error)
+                    f:close()
+                    completed(false, error)
                 end
-            end,
-            done = function(p)
-                f:close()
-                completed(true)
-            end,
-            error = function(p, error)
-                f:close()
-                self:_error(error)
-                completed(false, error)
-            end
-        })
-    end,
-    
-    fetch = function(self, host, path, port, handlers)
+            })
+            
+            return true
+        end        
         
-        self.handlers = handlers
-        
-        self.parser = parser:new({
-            status = function(p, code, phrase)
-                -- self:_trace("Status: %d '%s'", code, phrase)
-                return self.handlers.status(self, code, phrase)
-            end,
-            header = function(p, name, value)
-                --self:_trace("Header: '%s': '%s'", name, value)
-                return self.handlers.header(self, name, value)
-            end,
-            body = function(p, data)
-                -- self:_trace("Body: '%s'", data)
-                return self.handlers.body(self, data)
-            end,
-            done = function(p)
-                self:_done()
-            end,
-            error = function(p, error)
-                self:_error(error)
-            end
-        })
-    
-        self.socket = net.createConnection(net.TCP, 0)
-        self.socket:on("connection", function(sck)
-            self:_trace("Sending request...")
-            sck:send(
-                "GET " .. path .. " HTTP/1.1\r\n" ..
-                "Host: " .. host .. "\r\n" ..
-                "Connection: close\r\n" ..
-                "\r\n"
-            )
-        end)
-        self.socket:on("sent", function(sck)
-            self:_trace("Sent")
-        end)
-        self.socket:on("receive", function(sck, data)
-            self:_trace("Received %d byte(s)", data:len())
-            self.parser:process(data)
-        end)
-        self.socket:on("disconnection", function(sck, error)
-            if error then
-                self:_trace("Disconnected with error: %s", error)
-            else
-                self:_trace("Disconnected cleanly")
-            end
-            self.parser:finish()
-        end)
-        
-        self:_trace("Connecting to %s:%d...", host, port)
-        self.socket:connect(port, host)
+        return {
+            cancel = cancel,
+            fetch = fetch,
+            download = download
+        }
     end
 }
 
 return { 
     request = request,
-    parser = parser
+    parser = uhttp_parser
 }

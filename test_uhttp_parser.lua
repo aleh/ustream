@@ -1,6 +1,24 @@
-local uhttp = require("uhttp")
+local prev_heap = nil
+local function log_heap(msg)
+    collectgarbage()
+    local k, b = collectgarbage("count")
+    local now = k * 1024 + b
+    if prev_heap then
+        print(string.format("Used mem: %d (%d, %s)", now, now - prev_heap, msg))
+    else
+        print(string.format("Used mem: %d (%s)", now, msg))
+    end
+    prev_heap = now
+end
 
-local parser = uhttp.parser:new({
+log_heap("before")
+local parser = require("uhttp").uhttp_parser
+log_heap("after require")
+parser = nil
+package.loaded["uhttp"] = nil
+log_heap("after nillifying")
+
+local parser = parser.new({
     status = function(p, code, phrase)
         print(string.format("Status: %d '%s'", code, phrase))
         return true
