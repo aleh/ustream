@@ -1,4 +1,4 @@
--- uhttp. Streaming-style HTTP client for NodeMCU.
+-- uhttp, streaming-style HTTP parser and client for NodeMCU.
 -- Copyright (C) 2017, Aleh Dzenisiuk. 
 
 --[[
@@ -31,6 +31,8 @@
 local uhttp_parser = {
 
     new = function(handlers)
+        
+        package.loaded["uhttp"] = nil
         
         local handlers_status = handlers.status
         local handlers_header = handlers.header
@@ -174,7 +176,7 @@ local uhttp_parser = {
 
         -- This is fed with chunks of data coming from the socket. 
         -- Returns false if an error was encountered, true otherwise.
-        process = function(_self, data)
+        local process = function(_self, data)
             
             -- Safeguard against the client missing 'error' event.
             if state == 'done' then return false end
@@ -214,7 +216,7 @@ local uhttp_parser = {
         end
 
         -- Called when a corresponding connection is closed. Will fail if not everything has been received. 
-        finish = function(_self)
+        local finish = function(_self)
                 
             if state == 'done' then return true end
     
@@ -236,13 +238,15 @@ local uhttp_parser = {
 }
 
 --[[
-    Streaming HTTP request based on uhttp:parser and net:socket modules.
+    Streaming HTTP request based on uhttp:parser and NodeMCU's net:socket modules.
     'Streaming' means that the whole response does not have to be held in memory before it is given to the user of the module.
-    NOTE: this is not complete yet.
 ]]--
 local request = {
         
     new = function()
+        
+        -- Avoid caching of the module on NodeMCU.
+        package.loaded["uhttp"] = nil        
         
         local socket, handlers, parser
     
@@ -252,18 +256,24 @@ local request = {
         
         local _cleanup = function()        
             if socket then
+                
                 socket:close()
+                                
                 socket = nil
         
                 handlers = nil
         
-                parser = nil
+                if parser then
+                    parser:finish()
+                    parser = nil
+                end
             end
         end
     
         local cancel = function(self)
             if socket then
                 socket:close()
+                socket = nil
             end
         end
     
@@ -340,6 +350,7 @@ local request = {
             socket:connect(port, host)
         end
         
+        -- Fetches a resources at the given host/path/port and saves it into a file.
         local download = function(self, host, path, port, filename, completed)
                         
             local f = file.open(filename, "w")

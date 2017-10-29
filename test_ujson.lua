@@ -1,10 +1,4 @@
-local ujson = require("ujson")
-
-local function test(msg, ...)
-    print(string.format(msg, ...))
-end
-
-local p = ujson.new({
+local p = require("ujson").new({
     begin_element = function(p, path, key, type)
         return true
     end,

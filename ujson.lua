@@ -4,11 +4,9 @@
 --[[
     Simple streaming-style JSON parser originally made for NodeMCU, but not using any APIs specific to it.
 
-    Import as usual:
+    Create an instance first:
     
-    local ujson = require("ujson")
-    
-    Then create an instance using ujson:new() passing a dictionary of parsing event handlers and max_string_len (see below):
+    local parser = require("ujson").new() passing it a dictionary of parsing event handlers and max_string_len (see below):
     
         - 'element' = function(p, path, key, value, truncated)
             
@@ -56,37 +54,73 @@
 ]]--
 return {
     
-    new = function(_handlers)
-            
+    new = function(options)
+        
+        -- As always, trying to prevent caching on NodeMCU
+        package.loaded["ujson"] = nil
+        
+        -- Returning something as self, but for performance reasons using locals for the state.
         local self = {}
                         
-        local handlers = _handlers
+        local handlers_begin_element = options.begin_element
+        local handlers_end_element = options.end_element
+        local handlers_element = options.element
+        local handlers_error = options.error
+        local handlers_done = options.done
+        assert(handlers_begin_element and handlers_end_element and handlers_element and handlers_error and handlers_done)
+        
         -- The state of the parser.
         local state = 'idle'
+        
         -- Parser's stack (each character is an item) to remember if we are handling an array or a dictionary.
         local stack = ''
+        
         -- The current key path array, such as { "key1", 12, "key2" }, where every string elements represents a
         -- dictionary key and a number element represents an index in an array.
         local path = {}
+        
         -- The state of the tokenizer.
         local token_state = 'space'
         local token_substate, token_value, token_unicode_value
         local token_pos, expected_const
         local current_key, truncated
+        
         -- Global position in the incoming data, used only to report errors. 
         -- TODO: perhaps not very useful and should be removed.
         local position = 0
         local max_token_len = 64
-        local max_string_len = 256
+        local max_string_len = options.max_string_len or 256
     
         local _cleanup = function()
-            handlers = nil
+
+            handlers_begin_element = nil
+            handlers_end_element = nil
+            handlers_element = nil
+            handlers_error = nil
+            handlers_done = nil
+            
             stack = nil
             state = nil
             token_state = 'done'
             token_substate = nil
             token_value = nil
         end
+        
+        local _fail = function(msg, ...)
+            if token_state ~= 'done' then
+                -- _trace("failed: " .. msg, ...)
+                handlers_error(self, string.format(msg, ...))
+                _cleanup()
+            end
+        end
+    
+        local _done = function()
+            if token_state ~= 'done' then
+                -- _trace("done")
+                handlers_done(self)
+                _cleanup()
+            end
+        end        
     
         --[[
         local _trace = function(s, ...)
@@ -94,7 +128,7 @@ return {
         end,
         ]]--
     
-        -- For the fiven document path returns a string suitable for diagnostics, 
+        -- Returns a string representation of a path suitable for diagnostics, 
         -- e.g. "root[2][\"test2\"]" for the example above.
         self.string_for_path = function(self, path)
             local result = "root"
@@ -115,52 +149,24 @@ return {
         local _begin_element = function(key, type)
             table.insert(path, key)
             -- _trace("%s begin %q", string_for_path(path), type)
-            if handlers.begin_element then
-                return handlers.begin_element(self, path, key, type)
-            else
-                return true
+            local result = handlers_begin_element(self, path, key, type)
+            if not result then
+                _fail("begin_element handler has failed")
             end
+            return result
         end
     
         local _element = function(key, value, truncated)
             table.insert(path, key)
             -- _trace("%s %q -> '%s' (%s)", string_for_path(path), key, value, type(value))
-            local result = handlers.element(self, path, key, value, truncated)
+            local result = handlers_element(self, path, key, value, truncated)
             table.remove(path)
+            if not result then
+                _fail("element handler has failed")
+            end
             return result
         end
-    
-        local _end_element = function()
-            -- _trace("%s end", string_for_path(path))
-            local result
-            if handlers.end_element then
-                result = handlers.end_element(self, path)
-            else
-                result = true
-            end
-        
-            current_key = path[#path]
-            table.remove(path)
-        
-            return result
-        end
-    
-        local _fail = function(msg, ...)
-            if token_state ~= 'done' then
-                -- _trace("failed: " .. msg, ...)
-                handlers.error(self, string.format(msg, ...))
-                _cleanup()
-            end
-        end
-    
-        local _done = function()
-            if token_state ~= 'done' then
-                -- _trace("done")
-                handlers.done(self)
-                _cleanup()
-            end
-        end
-    
+            
         local _pop_state = function()
         
             if stack:len() == 0 then
@@ -180,6 +186,24 @@ return {
             return true
         end
         
+        local _end_element = function()
+            
+            -- _trace("%s end", string_for_path(path))
+            
+            local result = handlers_end_element(self, path)
+        
+            current_key = path[#path]
+            table.remove(path)
+                        
+            if not result then
+                return _fail("end_element handler has failed")
+            end
+            
+            if not _pop_state() then return false end
+        
+            return true
+        end        
+        
         local _process_token = function(token_type, token_value)
         
             token_state = 'space'
@@ -194,9 +218,7 @@ return {
         
             if state == 'idle' then
                 if token_type == '{' then
-                    if not _begin_element('', '{') then 
-                        return _fail("_begin_element handler has failed")
-                    end
+                    if not _begin_element('', '{') then return false end
                     stack = stack .. 'D'
                     state = 'dict-key'
                 else
@@ -207,10 +229,7 @@ return {
                     current_key = token_value
                     state = 'dict-colon'
                 elseif token_type == '}' then
-                    if not _end_element() then
-                        return _fail("end_object handler has failed")
-                    end
-                    if not _pop_state() then return false end
+                    if not _end_element() then return false end
                 else
                     return _fail("expected a string object key, got '%s'", token_type)
                 end
@@ -230,25 +249,18 @@ return {
                     else
                         state = 'array-comma'
                     end
-                    _element(current_key, token_value, truncated)
+                    if not _element(current_key, token_value, truncated) then return false end
                 elseif token_type == '[' then
                     stack = stack .. 'A'
                     state = 'array-element'
-                    if not _begin_element(current_key, '[') then
-                        return _fail("begin_element handler has failed")
-                    end
+                    if not _begin_element(current_key, '[') then return false end
                     current_key = 0
                 elseif token_type == '{' then
                     stack = stack .. 'D'
                     state = 'dict-key'
-                    if not _begin_element(current_key, '{') then
-                        return _fail("begin_element handler has failed")
-                    end
+                    if not _begin_element(current_key, '{') then return false end
                 elseif token_type == ']' and state == 'array-element' then
-                    if not _end_element() then 
-                        return _fail("end_element handler has failed") 
-                    end
-                    if not _pop_state() then return false end
+                    if not _end_element() then return false end
                 else
                     return _fail("expected a value, but got '%s'", token_type)
                 end
@@ -256,10 +268,7 @@ return {
                 if token_type == ',' then
                     state = 'array-element'
                 elseif token_type == ']' then
-                    if not _end_element() then 
-                        return _fail("end_element handler has failed") 
-                    end
-                    if not _pop_state() then return false end
+                    if not _end_element() then return false end
                 else
                     return _fail("expected a comma or end of array, but got '%s'", token_type)
                 end
@@ -267,10 +276,7 @@ return {
                 if token_type == ',' then
                     state = 'dict-key'
                 elseif token_type == '}' then
-                    if not _end_element() then
-                        return _fail("_end_object() failed")
-                    end
-                    if not _pop_state() then return false end
+                    if not _end_element() then return false end
                 end
             else
                 return _fail("invalid parser state: '%s'", state)
@@ -282,6 +288,24 @@ return {
         local _process_number_token = function()
             return _process_token('number', tonumber(token_value))
         end
+        
+        local _append_token_value = function(ch)
+            if token_value:len() < max_token_len then
+                token_value = token_value .. ch
+                return true
+            else
+                return _fail("a token is too large")
+            end
+        end
+    
+        local _append_string_token_value = function(ch)
+            if token_value:len() < max_string_len then
+                token_value = token_value .. ch
+            else
+                truncated = true      
+            end
+            return true
+        end        
     
         local _handle_number = function(ch)
         
@@ -366,25 +390,7 @@ return {
         
             return true
         end
-    
-        _append_token_value = function(ch)
-            if token_value:len() < max_token_len then
-                token_value = token_value .. ch
-                return true
-            else
-                return _fail("a token is too large")
-            end
-        end
-    
-        _append_string_token_value = function(ch)
-            if token_value:len() < max_string_len then
-                token_value = token_value .. ch
-            else
-                truncated = true      
-            end
-            return true
-        end
-                
+                    
         -- Called for every chunk of the data to be parsed. 
         -- Returns false, if the parsing has failed and no more data should be fed.
         self.process = function(self, data)
