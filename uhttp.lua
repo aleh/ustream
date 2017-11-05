@@ -140,7 +140,7 @@ local uhttp_parser = {
             if state == 'status-line' then
         
                 -- Status line
-                local code, phrase = line:match("^HTTP/1.1 (%d+) (.+)$")
+                local code, phrase = line:match("^HTTP/1.[01] (%d+) (.+)$")
                 if code == nil then
                     return _fail("Invalid status line")
                 end
@@ -364,7 +364,7 @@ local request = {
                     if code == 200 then
                         return true
                     else
-                        _trace("Expected %d", code)
+                        _trace("Expected 200, got %d", code)
                         return false
                     end
                 end,
