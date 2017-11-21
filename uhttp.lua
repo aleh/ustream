@@ -353,7 +353,7 @@ local request = {
         -- Fetches a resources at the given host/path/port and saves it into a file.
         local download = function(self, host, path, port, filename, completed)
                         
-            local f = file.open(filename, "w")
+            local f = file.open(filename, "w+")
             if not f then
                 completed(false, "could not open the file")
                 return false
