@@ -88,8 +88,9 @@ return {
         -- Global position in the incoming data, used only to report errors. 
         -- TODO: perhaps not very useful and should be removed.
         local position = 0
+        
         local max_token_len = 64
-        local max_string_len = options.max_string_len or 256
+        local max_string_len = options.max_string_len or 1024
     
         local _cleanup = function()
 
