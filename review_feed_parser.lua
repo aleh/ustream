@@ -106,7 +106,9 @@ return {
                 elseif path[5] == "title" and path[6] == "label" then
                     review.title = value
                 elseif path[5] == "id" and path[6] == "label" then
-                    review.id = value
+                    -- Forcing the ID to fit 31 bits by using last 9 digits so it works with integer-only
+                    -- versions of NodeMCU that allows only 32-bit signed integers.
+                    review.id = tonumber(value:sub(-9))
                 elseif path[5] == "author" and path[6] == "name" and path[7] == "label"then
                     review.author = value
                 elseif path[5] == "im:rating" and path[6] == "label" then
