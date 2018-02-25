@@ -224,8 +224,8 @@ local uhttp_parser = {
                 return _fail("Connection closed before got to the body")
             end
     
-            if content_length >= 0 and content_length ~= actual_body_length then
-                return _fail("Connection closed before the body was received completely")
+            if content_length >= 0 and actual_content_length < content_length then
+                return _fail(string.format("Connection closed too early (expected %d bytes, got %d)", content_length, actual_content_length))
             end
     
             body_left_over = ''
@@ -254,11 +254,12 @@ local request = {
             print(string.format("uhttp: " .. s, ...))
         end
         
-        local _cleanup = function()        
+        local _cleanup = function()
+            
             if socket then
                 
-                socket:close()
-                                
+                -- In newer versions of NodeMCU calling close() is not safe in case there is no connection.
+                pcall(function() socket:close() end)
                 socket = nil
         
                 handlers = nil
@@ -272,7 +273,7 @@ local request = {
     
         local cancel = function(self)
             if socket then
-                socket:close()
+                pcall(function() socket:close() end)
                 socket = nil
             end
         end
@@ -331,13 +332,15 @@ local request = {
             socket:on("sent", function(sck)
                 _trace("Sent")
             end)
+            
             socket:on("receive", function(sck, data)
                 _trace("Received %d byte(s)", data:len())
                 parser:process(data)
             end)
+            
             socket:on("disconnection", function(sck, error)
-                if error then
-                    _trace("Disconnected with error: %s", error)
+                if error and error ~= 0 then
+                    _trace("Disconnected with error: %d", error)
                 else
                     _trace("Disconnected cleanly")
                 end
