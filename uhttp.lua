@@ -45,8 +45,10 @@ local uhttp_parser = {
         local state = 'status-line'
         local content_length = -1
         local actual_content_length = 0
-        local body_left_over = nil
-            
+        local body_leftover = nil
+        -- True, if the transfer coding is 'chunked'.
+        local chunked = false
+
         local _cleanup = function()
             
             handlers_status = nil
@@ -59,7 +61,7 @@ local uhttp_parser = {
             line_state = nil
             -- Mark as completed, so further calls of `process` will do nothing.
             state = 'done'
-            body_left_over = nil
+            body_leftover = nil
         end
 
         local _fail = function(message)
@@ -69,7 +71,7 @@ local uhttp_parser = {
         end
 
         local _done = function()
-            handlers_done(self, body_left_over)
+            handlers_done(self, body_leftover)
             _cleanup()
             return true
         end
@@ -97,6 +99,13 @@ local uhttp_parser = {
             if name == "content-length" then
                 content_length = tonumber(value)
             end
+            if name == "transfer-coding" then
+                if value == 'chunked' then
+                    chunked = true
+                else
+                    return _fail(string.format("unsupported transfer-coding: '%s'", value))
+                end
+            end
     
             -- Then call the handlers.
             if handlers_header(self, name, value) then
@@ -105,9 +114,9 @@ local uhttp_parser = {
                 return _fail("header handler has failed")
             end
         end
-    
-        local _process_body = function(data)
-    
+
+        local _append_body_data = function(data)
+            
             local actual_data = data
             local done = false
             
@@ -118,7 +127,7 @@ local uhttp_parser = {
                     -- OK, no more, we are done after that.
                     done = true
                     actual_data = data:sub(1, left)
-                    body_left_over = data:sub(left + 1, -1)
+                    body_leftover = data:sub(left + 1, -1)
                 end
             end
         
@@ -132,6 +141,107 @@ local uhttp_parser = {
                 return _done()
             else
                 return true
+            end            
+        end
+        
+        local chunk_size_string = ''
+        local chunk_size = 0
+        local chunk_state = 'size'
+        
+        -- When Transfer-Coding is set to 'chunked', then we need to parse it a bit.
+        local _process_chunked_data = function(data)
+            local i = 1
+            local len = data:len()
+            while i <= len do
+                
+                if chunk_state == 'size' then
+                    
+                    -- Expecting the size of the next chunk, a hexadecimal number.
+                    local ch = data:sub(i, i)
+                    i = i + 1         
+                                   
+                    if ch:match('%x') then
+                        chunk_size_string = chunk_size_string .. ch                        
+                        if chunk_size_string:len() > 8 then
+                            -- Of course there can be leading zeros, but it's weird to have that many 
+                            -- and we need a limit anyway.
+                            return _fail("chunk size string is too long")
+                        end
+                    elseif ch == "\r" then
+                        chunk_state = 'size-lf'
+                    elseif ch == ';' then
+                        return _fail("chunk extensions are not supported")
+                    else
+                        return _fail("unexpected character in a chunk header")
+                    end
+                    
+                elseif chunk_state == 'size-lf' then
+                    
+                    -- Expecting LF after the chunk size.
+                    local ch = data:sub(i, i)
+                    i = i + 1
+                    
+                    if ch ~= "\n" then
+                        return _fail("missing LF in a chunk header")
+                    else
+                        chunk_size = tonumber(chunk_size_string, 16)
+                        
+                        if chunk_size < 0 then
+                            -- Don't let an integer overflow to confuse us.
+                            return _fail("chunk size is too big")
+                        end
+                        
+                        if chunk_size == 0 then
+                            -- The last chunk has zero size.
+                            -- OK, done. Don't need to check what's after, let's finish now.
+                            -- And we don't support the leftover (trailer) in this case.
+                            chunk_state = 'end'
+                            body_leftover = data:sub(i)
+                            return _done()
+                        else
+                            -- OK, ready for the body of the chunk.
+                            chunk_state = 'body'
+                        end
+                    end
+                    
+                elseif chunk_state == 'body' then
+                    
+                    local bytes_left = data:len() - i + 1
+                    local bytes_to_grab
+                    if chunk_size <= bytes_left then
+                        bytes_to_grab = chunk_size
+                    else
+                        bytes_to_grab = bytes_left
+                    end
+                                        
+                    local actual_data = data:sub(i, i + bytes_to_grab - 1)
+
+                    if not handlers_body(self, actual_data) then
+                        return _fail("body handler has failed")
+                    end
+                    
+                    i = i + actual_data:len()
+                    actual_content_length = actual_content_length + actual_data:len()
+                    
+                    chunk_size = chunk_size - actual_data:len()                        
+                    if chunk_size == 0 then
+                        -- OK, this chunk is over. Next!
+                        chunk_state = 'size'
+                        chunk_size_string = ''
+                    end
+
+                else
+                    return _fail("invalid parser state")
+                end
+            end            
+        end        
+        
+        local _process_body = function(data)
+            
+            if chunked then
+                return _process_chunked_data(data)
+            else
+                return _append_body_data(data)
             end
         end  
 
@@ -167,7 +277,7 @@ local uhttp_parser = {
                 end
         
             else
-                return _fail("Invalid parser state")
+                return _fail("invalid parser state")
             end
     
             line = ""
@@ -221,14 +331,18 @@ local uhttp_parser = {
             if state == 'done' then return true end
     
             if state ~= 'body' then
-                return _fail("Connection closed before got to the body")
+                return _fail("connection closed before got to the body")
             end
     
             if content_length >= 0 and actual_content_length < content_length then
-                return _fail(string.format("Connection closed too early (expected %d bytes, got %d)", content_length, actual_content_length))
+                return _fail(string.format("connection closed too early (expected %d bytes, got %d)", content_length, actual_content_length))
+            end
+            
+            if chunked and state ~= 'end' then
+                return _fail("connection closed too early (have not seen the zero chunk)")
             end
     
-            body_left_over = ''
+            body_leftover = ''
     
             return _done()
         end
@@ -300,15 +414,15 @@ local request = {
         
             parser = uhttp_parser.new({
                 status = function(p, code, phrase)
-                    -- self:_trace("Status: %d '%s'", code, phrase)
+                    -- _trace("Status: %d '%s'", code, phrase)
                     return handlers.status(self, code, phrase)
                 end,
                 header = function(p, name, value)
-                    --self:_trace("Header: '%s': '%s'", name, value)
+                    -- _trace("Header: '%s': '%s'", name, value)
                     return handlers.header(self, name, value)
                 end,
                 body = function(p, data)
-                    -- self:_trace("Body: '%s'", data)
+                    -- _trace("Body: '%s'", data)
                     return handlers.body(self, data)
                 end,
                 done = function(p)
