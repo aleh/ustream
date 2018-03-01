@@ -1,12 +1,12 @@
 -- ujson, streaming-style JSON parser.
--- Copyright (C) 2017, Aleh Dzenisiuk. 
+-- Copyright (C) 2017-2018, Aleh Dzenisiuk. 
 
 --[[
     Simple streaming-style JSON parser originally made for NodeMCU, but not using any APIs specific to it.
 
     Create an instance first:
     
-    local parser = require("ujson").new() passing it a dictionary of parsing event handlers and max_string_len (see below):
+    local parser = require("ujson").new() passing it a dictionary of parsing event handlers options:
     
         - 'element' = function(p, path, key, value, truncated)
             
@@ -41,6 +41,10 @@
             
             Called once after the root object is successfully parsed.
             
+        - 'max_string_len' = number
+        
+            This is the maximum length of a single string the parser will accept.
+            
     Every handler returns `true` to indicate that the parsing can continue and `false` to mean that a parsing error 
     should be triggered.
     
@@ -49,8 +53,8 @@
     
     It is safe to call `process` even after the parsing has failed, it won't call the `error` callback more than once.
     
-    The `finish` method should be called after all the data is fed. An error will be triggered if there is not enough data 
-    in the incoming stream to complete the document.
+    The `finish` method should be called after all the data is fed. 
+    An error will be triggered if there is not enough data in the incoming stream to complete the document.
 ]]--
 return {
     
