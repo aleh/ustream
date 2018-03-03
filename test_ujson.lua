@@ -1,3 +1,4 @@
+
 local p = require("ujson").new({
     begin_element = function(p, path, key, type)
         return true

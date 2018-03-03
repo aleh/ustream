@@ -98,20 +98,45 @@ local request = {
                 _trace("Sent")
             end)
             
+            -- How many data chunks are scheduled for processing but are not really processed yet.
+            local num_chunks_scheduled = 0
+            
             socket:on("receive", function(sck, data)
-                _trace("Received %d byte(s)", data:len())
-                parser:process(data)
+                                
+                -- Our processing can take some time depending on what's happening together with HTTP parsing, 
+                -- so we schedule the processing as the next event and we throttle the socket using hold/unhold.
+                -- Otherwise there is a risk that too much data is coming and overflowing the memory 
+                -- while we are busy processing.
+                num_chunks_scheduled = num_chunks_scheduled + 1
+                if num_chunks_scheduled == 1 then
+                    sck:hold()
+                end
+                
+                node.task.post(0, function()
+                    _trace("Received %d byte(s)", data:len())
+                    parser:process(data)
+                    num_chunks_scheduled = num_chunks_scheduled - 1
+                    node.task.post(0, function()
+                        if num_chunks_scheduled == 0 then
+                            sck:unhold()
+                        end
+                    end)
+                end)
             end)
             
             socket:on("disconnection", function(sck, error)
-                if error and error ~= 0 then
-                    _trace("Disconnected with error: %d", error)
-                else
-                    _trace("Disconnected cleanly")
-                end
-                if parser then
-                    parser:finish()
-                end
+                -- Schedule the actual handling for the next event because some chunks can be 
+                -- still scheduled for processing.
+                node.task.post(0, function()
+                    if error and error ~= 0 then
+                        _trace("Disconnected with error: %d", error)
+                    else
+                        _trace("Disconnected cleanly")
+                    end
+                    if parser then
+                        parser:finish()
+                    end
+                end)
             end)
         
             _trace("Connecting to %s:%d...", host, port)

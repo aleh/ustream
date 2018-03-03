@@ -1,5 +1,5 @@
 -- ujson, streaming-style JSON parser.
--- Copyright (C) 2017, Aleh Dzenisiuk. 
+-- Copyright (C) 2017-2018, Aleh Dzenisiuk. 
 
 -- A simple test for the review_feed_parser module.
 

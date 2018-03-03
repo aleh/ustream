@@ -70,7 +70,7 @@ Here is how you can use the download() function:
 
 Example of using the HTTP parser alone:
 
-    local parser = require("uhttp").parser.new({
+    local parser = require("uhttp_parser").new({
         status = function(p, code, phrase)
             print(string.format("Status: %d '%s'", code, phrase))
             return true
