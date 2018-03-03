@@ -2,19 +2,24 @@
 -- Copyright (C) 2017-2018, Aleh Dzenisiuk. 
 
 --[[
-    Streaming HTTP request based on uhttp:parser and NodeMCU's net:socket modules.
-    'Streaming' means that the whole response does not have to be held in memory before it is given to the user of the module.
+
+Streaming-style HTTP request based on uhttp.parser and NodeMCU's net.socket modules.
+
+'Streaming' here means that the whole response does not have to be held in memory 
+before it is given to the user of the module, i.e. the client can process data in small 
+chunks and store only what's needed.
+
 ]]--
-local request = {
+return {
         
-    new = function()
+    new = function(trace_callback)
         
         -- Avoid caching of the module on NodeMCU.
-        package.loaded["uhttp"] = nil        
+        package.loaded["uhttp_request"] = nil
         
         local socket, handlers, parser
     
-        -- TODO: allow to pass tracing function to new()
+        -- TODO: allow to pass the tracing function to new()?
         local _trace = function(s, ...)
             print(string.format("uhttp: " .. s, ...))
         end
@@ -23,7 +28,7 @@ local request = {
             
             if socket then
                 
-                -- In newer versions of NodeMCU calling close() is not safe in case there is no connection.
+                -- In newer versions of NodeMCU calling close() is not safe in case the socket is not connected.
                 pcall(function() socket:close() end)
                 socket = nil
         
@@ -73,7 +78,7 @@ local request = {
                     return handlers.header(self, name, value)
                 end,
                 body = function(p, data)
-                    -- _trace("Body: '%s'", data)
+                    -- _trace("Body chunk: '%s'", data)
                     return handlers.body(self, data)
                 end,
                 done = function(p)
@@ -94,6 +99,7 @@ local request = {
                     "\r\n"
                 )
             end)
+
             socket:on("sent", function(sck)
                 _trace("Sent")
             end)
@@ -113,18 +119,27 @@ local request = {
                 end
                 
                 node.task.post(0, function()
+                    
                     _trace("Received %d byte(s)", data:len())
                     parser:process(data)
+                    
                     num_chunks_scheduled = num_chunks_scheduled - 1
-                    node.task.post(0, function()
-                        if num_chunks_scheduled == 0 then
-                            sck:unhold()
-                        end
-                    end)
+                    
+                    if num_chunks_scheduled == 0 then
+                        -- Deferring the call of unhold() seems to be helping to further smooth the load.
+                        node.task.post(0, function()
+                            -- Need to check again, because it is possible that a new chunk has been 
+                            -- scheduled meanwhile.
+                            if num_chunks_scheduled == 0 then
+                                sck:unhold()
+                            end
+                        end)
+                    end
                 end)
             end)
             
             socket:on("disconnection", function(sck, error)
+                
                 -- Schedule the actual handling for the next event because some chunks can be 
                 -- still scheduled for processing.
                 node.task.post(0, function()
@@ -187,9 +202,4 @@ local request = {
             download = download
         }
     end
-}
-
-return { 
-    request = request,
-    parser = uhttp_parser
 }

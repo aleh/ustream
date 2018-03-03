@@ -53,7 +53,7 @@ Note the the logical step of using a JSON parser here is not feasible as the par
 
 Here is how you can use the download() function:
 
-    local request = require("uhttp").request.new()
+    local request = require("uhttp_request").new()
     request:download(
         host, path, port,
         "filename.json",
@@ -105,7 +105,6 @@ Example of using the HTTP parser alone:
     parser:process("Body. ")
     parser:process("Will we support chunked encoding? Extra stuff here, not part of the content")
     assert(parser:finish())
-
 
 ## ujson
 
