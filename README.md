@@ -8,7 +8,7 @@ This piece-by-piece processing means writing the body of the response into a fil
 
 ## uhttp
 
-Here is an example of a download function (part of `uhttp.request`) that writes an HTTP response directly into a file using without using much memory:
+Here is an example of a download function (part of `uhttp.request`) that writes an HTTP response directly into a file without using much memory:
 
     local download = function(self, host, path, port, filename, completed)
                 
