@@ -83,6 +83,8 @@ return {
         end    
         
         parser = require("ujson").new({
+			
+			max_string_len = 512,
             
             begin_element = function(p, path, key, type)
                 if not in_article and is_article_path(path) then
