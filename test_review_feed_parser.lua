@@ -8,7 +8,7 @@ local print_mem = function()
     collectgarbage()
     local m, _ = collectgarbage('count')
     if m > max_mem then max_mem = m end
-    print(string.format("Memory: %dK (max %dK)", m, max_mem))
+    print(string.format("Memory: %d (max %d)", m * 1024, max_mem * 1024))
 end
 
 print_mem()
