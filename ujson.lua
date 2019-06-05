@@ -70,6 +70,9 @@
 	is not enough data in the incoming stream to complete the document.
 ]]--
 return function(begin_element_callback, element_callback, end_element_callback, done_callback, error_callback, max_string_len)
+	
+    -- Avoid caching of the module on NodeMCU.
+    package.loaded["ujson"] = nil	
     		
     -- Returning something as self, but for performance reasons using locals for the state.
     local self = {}
