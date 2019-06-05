@@ -82,11 +82,9 @@ return {
             end
         end    
         
-        parser = require("ujson").new({
+        parser = require("ujson")(
 			
-			max_string_len = 512,
-            
-            begin_element = function(p, path, key, type)
+            function(p, path, key, type)
                 if not in_article and is_article_path(path) then
                     in_article = true
                     review = {}
@@ -94,7 +92,7 @@ return {
                 return true
             end,
             
-            element = function(p, path, key, value, truncated)
+            function(p, path, key, value, truncated)
                 
                 -- print(p:string_for_path(path), value)
                 if not in_article then return true end
@@ -120,7 +118,7 @@ return {
                 return true
             end,
             
-            end_element = function(p, path)
+			function(p, path)
                 if in_article and is_article_path(path) then
                     in_article = false
                     handlers_review(self, review)
@@ -128,20 +126,22 @@ return {
                 return true
             end,
             
-            done = function(p)
+			function(p)
                 if not done then
                     handlers_done(self)
                     cleanup(self)
                 end
             end,
             
-            error = function(p, error)
+			function(p, error)
                 if not done then
                     handlers_error(self, error)
                     cleanup(self)
                 end
-            end            
-        })
+            end,
+				
+			512
+        )
         
         return self
     end

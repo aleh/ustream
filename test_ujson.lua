@@ -1,25 +1,25 @@
 
-local p = require("ujson").new({
-    begin_element = function(p, path, key, type)
+local p = require("ujson")(
+    function(p, path, key, type) -- begin_element
         return true
     end,
-    element = function(p, path, key, value)
+	function(p, path, key, value) -- element
         print(p:string_for_path(path))
         if path[2] == "array" and path[4] == "key" then
             print(value)
         end
         return true
     end,
-    end_element = function(p, path)
+    function(p, path) -- end_element
         return true
     end,
-    done = function(p)
+	function(p) -- done
         print("Done")
     end,
-    error = function(p, error)
+	function(p, error) -- error
         print("Error: " .. error)
     end
-})
+)
 
 p:process('{')
 p:process('"test" : "😀 emoji and')

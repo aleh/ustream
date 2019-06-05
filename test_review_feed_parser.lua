@@ -3,17 +3,34 @@
 
 -- A simple test for the review_feed_parser module.
 
-local max_mem = 0
-local print_mem = function()
-    collectgarbage()
-    local m, _ = collectgarbage('count')
-    if m > max_mem then max_mem = m end
-    print(string.format("Memory: %d (max %d)", m * 1024, max_mem * 1024))
+local prev_heap
+local log_heap = function(msg)
+	
+	collectgarbage()
+	
+    local h, _ = collectgarbage('count')
+	h = h * 1024
+	
+    if prev_heap then
+        if msg then
+            print(string.format("Heap: %d (%+d, %s)", h, h - prev_heap, msg))
+        else
+            print(string.format("Heap: %d (%+d)", h, h - prev_heap))
+        end
+    else
+        print(string.format("Heap: %d", h))
+    end
+	
+    prev_heap = h
 end
 
-print_mem()
+log_heap()
 
-local parser = require("review_feed_parser").new({
+local parser = require("review_feed_parser")
+
+log_heap("loaded parser")
+
+parser = parser.new({
     
     review = function(p, review)
         
@@ -29,10 +46,14 @@ local parser = require("review_feed_parser").new({
             return result
         end
         
-        print(string.format(
-            "---\n\n%s %s (by %s) #%s\n\n%s\n---\n", 
-            stars(review.rating), review.title, review.author, review.id, review.content
-        ))
+		if false then
+	        print(string.format(
+	            "---\n\n%s %s (by %s) #%s\n\n%s\n---\n", 
+	            stars(review.rating), review.title, review.author, review.id, review.content
+	        ))
+		end
+		
+		log_heap()		
     end,
     
     error = function(p, message)
@@ -44,18 +65,19 @@ local parser = require("review_feed_parser").new({
     end
 })
 
+log_heap("created parser")
+
 local f = io.open("test_review_feed.json")
 while true do
     local line = f:read()
     if not line then break end
     parser:process(line)
-    print_mem()
 end
 
 parser:finish()
 parser = nil
-print_mem()
+log_heap("done parsing")
 
 f:close()
 f = nil
-print_mem()
+log_heap()
