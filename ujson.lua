@@ -77,8 +77,8 @@ return function(begin_element_callback, element_callback, end_element_callback, 
     -- Returning something as self, but for performance reasons using locals for the state.
     local self = {}
                         
-    -- The state of the parser.
-    local state = 'idle'
+    -- The state of the parser. See mapping in _process_token().
+    local state = 0
     
     -- Parser's stack (each character is an item) to remember if we are handling an array or a dictionary.
     local stack = ''
@@ -185,9 +185,9 @@ return function(begin_element_callback, element_callback, end_element_callback, 
         stack = stack:sub(1, -2)
         local prev_state = stack:sub(-1)
         if prev_state == 'A' then
-            state = 'array-comma'
+            state = 21 -- array-comma
         elseif prev_state == 'D' then
-            state = 'dict-comma'
+            state = 13 -- dict-comma
         else
             _done()
         end
@@ -215,6 +215,18 @@ return function(begin_element_callback, element_callback, end_element_callback, 
     
     local _process_token = function(token_type, token_value)
     
+		-- Was using string constants for `state` before, but trying to improve performance and memory consumption
+		-- by using numbers now:
+		--[[ 
+		idle: 0
+		dict-key: 10
+		dict-colon: 11
+		dict-value: 12
+		dict-comma: 13
+		array-element: 20
+		array-comma: 21
+		]]--
+		
         token_state = 'space'
     
         --[[
@@ -225,65 +237,65 @@ return function(begin_element_callback, element_callback, end_element_callback, 
         end
         ]]--
     
-        if state == 'idle' then
+        if state == 0 then -- idle
             if token_type == '{' then
                 if not _begin_element('', '{') then return false end
                 stack = stack .. 'D'
-                state = 'dict-key'
+                state = 10 -- dict-key
             else
                 return _fail("missing root dict")
             end
-        elseif state == 'dict-key' then
+        elseif state == 10 then -- dict-key
             if token_type == 'string' then
                 current_key = token_value
-                state = 'dict-colon'
+                state = 11 -- dict-colon
             elseif token_type == '}' then
                 if not _end_element() then return false end
             else
                 return _fail("expected a string key, got '%s'", token_type)
             end
-        elseif state == 'dict-colon' then
+        elseif state == 11 then -- dict-colon
             if token_type == ':' then
-                state = 'dict-value'
+                state = 12 -- dict-value
             else
                 return _fail("expected ':', got '%s'", token_type)
             end
-        elseif state == 'dict-value' or state == 'array-element' then
-            if state == 'array-element' then
+        elseif state == 12 or state == 20 then -- dict-value or array-element
+            if state == 20 then -- array-element
                 current_key = current_key + 1
             end
             if token_type == 'const' or token_type == 'string' or token_type == 'number' then
-                if state == 'dict-value' then
-                    state = 'dict-comma'
+                if state == 12 then -- dict-value
+                    state = 13 -- dict-comma
                 else
-                    state = 'array-comma'
+                    state = 21 -- array-comma
                 end
                 if not _element(current_key, token_value, truncated) then return false end
             elseif token_type == '[' then
                 stack = stack .. 'A'
-                state = 'array-element'
+                state = 20 -- array-element
                 if not _begin_element(current_key, '[') then return false end
                 current_key = 0
             elseif token_type == '{' then
                 stack = stack .. 'D'
-                state = 'dict-key'
+                state = 10 -- dict-key
                 if not _begin_element(current_key, '{') then return false end
-            elseif token_type == ']' and state == 'array-element' then
+            elseif token_type == ']' and state == 20 then -- array-element
                 if not _end_element() then return false end
             else
                 return _fail("expected a value, got '%s'", token_type)
             end
-        elseif state == 'array-comma' then
+        elseif state == 21 then -- array-comma
             if token_type == ',' then
-                state = 'array-element'
+                state = 20 -- array-element
             elseif token_type == ']' then
                 if not _end_element() then return false end
             else
                 return _fail("expected ',' or ']', got '%s'", token_type)
             end
-        elseif state == 'dict-comma' then
+        elseif state == 13 then -- dict-comma
             if token_type == ',' then
-                state = 'dict-key'
+                state = 10 -- dict-key
             elseif token_type == '}' then
                 if not _end_element() then return false end
             end
