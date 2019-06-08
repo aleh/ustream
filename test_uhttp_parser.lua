@@ -2,26 +2,26 @@
 -- Copyright (C) 2017-2018, Aleh Dzenisiuk. 
 
 local parser_new = function () 
-    return require("uhttp_parser").new({
-        status = function(p, code, phrase)
+    return require("uhttp_parser")(
+		function(p, code, phrase) -- status
             print(string.format("Status: %d '%s'", code, phrase))
             return true
         end,
-        header = function(p, name, value)
+		function(p, name, value) -- header
             print(string.format("Header: '%s': '%s'", name, value))
             return true
         end,
-        body = function(p, data)
+		function(p, data) -- body
             print(string.format("Data: '%s'", data))
             return true
         end,
-        done = function(p, leftover)
+		function(p, leftover) -- done
             print(string.format("Done. Leftover: '%s'", leftover))
         end,
-        error = function(p, error)
+		function(p, error) -- error
             print(string.format("Error: %s", error))
         end
-    })
+	)
 end
 
 local p = parser_new()

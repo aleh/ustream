@@ -26,13 +26,9 @@ end
 
 log_heap()
 
-local parser = require("review_feed_parser")
-
-log_heap("loaded parser")
-
-parser = parser.new({
+local parser = require("review_feed_parser")(
     
-    review = function(p, review)
+	function(p, review) -- review
         
         local stars = function(n)
             local result = ""
@@ -56,14 +52,14 @@ parser = parser.new({
 		log_heap()		
     end,
     
-    error = function(p, message)
-        print("Oops: " .. message)
-    end,
-    
-    done = function(p)
+	function(p) -- done
         print("Done")
+    end,
+	
+	function(p, message) -- error
+        print("Oops: " .. message)
     end
-})
+)
 
 log_heap("created parser")
 
