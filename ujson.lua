@@ -88,7 +88,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
     local path = {}
     
     -- The state of the tokenizer.
-    local token_state = 'space'
+    local token_state = 0
     local token_substate, token_value, token_unicode_value
     local token_pos, expected_const
     local current_key, truncated
@@ -110,13 +110,13 @@ return function(begin_element_callback, element_callback, end_element_callback, 
         
         stack = nil
         state = nil
-        token_state = 'done'
+        token_state = 1 -- done
         token_substate = nil
         token_value = nil
     end
     
     local _fail = function(msg, ...)
-        if token_state ~= 'done' then
+        if token_state ~= 1 then -- done
             -- _trace("failed: " .. msg, ...)
             error_callback(self, string.format(msg, ...))
             _cleanup()
@@ -124,7 +124,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
     end
 
     local _done = function()
-        if token_state ~= 'done' then
+        if token_state ~= 1 then -- done
             -- _trace("done")
             done_callback(self)
             _cleanup()
@@ -142,7 +142,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
     self.string_for_path = function(self, path)
         local result = "root"
         for k, v in ipairs(path) do
-            if type(v) == 'string' then
+            if type(v) == 'string' then 
                 if k ~= 1 then
                     result = result .. string.format("[%q]", v)
                 end
@@ -227,7 +227,16 @@ return function(begin_element_callback, element_callback, end_element_callback, 
 		array-comma: 21
 		]]--
 		
-        token_state = 'space'
+		-- Same for token_state, using numbers now:
+		--[[
+		space: 0
+		done: 1
+		string: 2
+		number: 3
+		const: 4
+		]]--
+		
+        token_state = 0 -- space
     
         --[[
         if token_type == token_value then
@@ -264,7 +273,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
             if state == 20 then -- array-element
                 current_key = current_key + 1
             end
-            if token_type == 'const' or token_type == 'string' or token_type == 'number' then
+            if token_type == 'const' or token_type == 'string' or token_type == 'number' then 
                 if state == 12 then -- dict-value
                     state = 13 -- dict-comma
                 else
@@ -331,73 +340,86 @@ return function(begin_element_callback, element_callback, end_element_callback, 
     local _handle_number = function(ch)
     
         -- TODO: check if the token value is too long
+		
+		-- For `token_substate` it's the same story as for `state` and `token_state`, need to switch to using numbers:
+		--[[
+			zero-or-digit: 0
+			dot: 1
+			digit: 2
+			fraction-digit: 3
+			exp-sign: 4
+			exp: 5
+			char: 20
+			escape-char: 21
+			unicode: 22
+		]]--
     
-        if token_substate == 'zero-or-digit' then
+        if token_substate == 0 then -- zero-or-digit
         
             -- Had a minus before.
             if ch == '0' then
                 -- Leading zero, expect a dot or the end of token afterwards.
-                token_substate = 'dot'
+                token_substate = 1 -- dot
                 if not _append_token_value(ch) then return false end
             elseif string.find("123456789", ch, 1, true) then
                 -- Non-zero digit, any digit or dot can follow.
-                token_substate = 'digit'
+                token_substate = 2 -- digit
                 if not _append_token_value(ch) then return false end                
             else
                 -- Something else, let's fail because we have only a minus so far.
                 return _fail("unexpected char in a number at %d", position + i)
             end
         
-        elseif token_substate == 'dot' then
+        elseif token_substate == 1 then -- dot
         
             -- After a leading zero now, expecting a dot or the end of the token here.
             if ch == '.' then
-                token_substate = 'fraction-digit'
+                token_substate = 3 -- fraction-digit
                 if not _append_token_value(ch) then return false end                
             else
                 return _process_number_token(), true
             end
         
-        elseif token_substate == 'digit' then
+        elseif token_substate == 2 then -- digit
         
             -- Digits before the dot.
             if string.find("0123456789", ch, 1, true) then
                 if not _append_token_value(ch) then return false end                
             elseif ch == 'e' or ch == 'E' then
                 -- Exponent in a number without the fractional part
-                token_substate = 'exp-sign'
+                token_substate = 4 -- exp-sign
                 if not _append_token_value(ch) then return false end                
             elseif ch == '.' then
-                token_substate = 'fraction-digit'
+                token_substate = 3 -- fraction-digit
                 if not _append_token_value(ch) then return false end                
             else
                 return _process_number_token(), true
             end
         
-        elseif token_substate == 'fraction-digit' then
+        elseif token_substate == 3 then -- fraction-digit
         
             -- Digits after the dot.
             if string.find("0123456789", ch, 1, true) then
                 if not _append_token_value(ch) then return false end                
             elseif ch == 'e' or ch == 'E' then
-                token_substate = 'exp-sign'
+                token_substate = 4 -- exp-sign
                 if not _append_token_value(ch) then return false end                
             else
                 return _process_number_token(), true
             end
         
-        elseif token_substate == 'exp-sign' then
+        elseif token_substate == 4 then -- exp-sign
         
             if ch == '-' or ch == '+' then
-                token_substate = 'exp'
+                token_substate = 5 -- exp
                 if not _append_token_value(ch) then return false end                
             else
                 -- Got something different from plus or minus, let's reevaluate the current character.
-                token_substate = 'exp'
+                token_substate = 5 -- exp
                 return true, true
             end
         
-        elseif token_substate == 'exp' then
+        elseif token_substate == 5 then -- exp
         
             if string.find("0123456789", ch, 1, true) then
                 if not _append_token_value(ch) then return false end                
@@ -416,13 +438,15 @@ return function(begin_element_callback, element_callback, end_element_callback, 
     -- Returns false, if the parsing has failed and no more data should be fed.
     self.process = function(self, data)
     
-        if token_state == 'done' then return false end
+        if token_state == 1 then -- done
+			return false 
+		end
     
         local i = 1                
         while i <= data:len() do
             local ch = data:sub(i, i)
             local reevaluate = false
-            if token_state == 'space' then                
+            if token_state == 0 then -- space
                 if string.find("\n\r\t ", ch, 1, true) then
                     -- Whitespace, just skipping. Could include more characters, but these alone are reasonable.
                 elseif string.find("{}[],:", ch, 1, true) then
@@ -430,66 +454,66 @@ return function(begin_element_callback, element_callback, end_element_callback, 
                     if not _process_token(ch, ch) then return false end
                 elseif ch == "\"" then
                     -- Beginning a string.
-                    token_state = 'string'
+                    token_state = 2 -- string
                     token_value = ""
-                    token_substate = 'char'
+                    token_substate = 20 -- char
                     truncated = false
                 elseif string.find("-0123456789", ch, 1, true) then
                     -- Looks like start of a number.
-                    token_state = 'number'
+                    token_state = 3 -- number
                     if ch == "-" then
-                        token_substate = 'zero-or-digit'
+                        token_substate = 0 -- zero-or-digit
                     elseif ch == "0" then
-                        token_substate = 'dot'
+                        token_substate = 1 -- dot
                     else
-                        token_substate = 'digit'
+                        token_substate = 2 -- digit
                     end
                     token_value = ch
                 elseif ch == "t" then
-                    token_state = 'const'
+                    token_state = 4 -- const
                     expected_const = 'true'
                     token_pos = 1
                     token_value = true
                 elseif ch == "f" then
-                    token_state = 'const'
+                    token_state = 4 -- const
                     expected_const = 'false'
                     token_pos = 1
                     token_value = false
                 elseif ch == "n" then
-                    token_state = 'const'
+                    token_state = 4 -- const
                     expected_const = 'null'
                     token_value = nil
                     token_pos = 1
                 else
                     return _fail(string.format("bad token at %d", position + i))
                 end
-            elseif token_state == 'string' then
-                if token_substate == 'char' then
+            elseif token_state == 2 then -- string
+                if token_substate == 20 then -- char
                     if ch == '"' then
                         if not _process_token('string', token_value) then return false end
-                        token_state = 'space'
+                        token_state = 0 -- space
                     elseif ch == '\\' then
-                        token_substate = 'escape-char'
+                        token_substate = 21 -- escape-char
                     else
                         if not _append_string_token_value(ch) then return false end
                         -- TODO: check if the string is too long
                     end
-                elseif token_substate == 'escape-char' then    
+                elseif token_substate == 21 then -- escape-char
                     local p = string.find("\"\\/bfnrt", ch, 1, true)
                     if p then 
                         if not _append_string_token_value(string.sub("\"\\/\b\f\n\r\t", p, p)) then return false end
-                        token_substate = 'char'
+                        token_substate = 20 -- char
                     elseif ch == 'u' then
-                        token_substate = 'unicode'
+                        token_substate = 22 -- unicode
                         token_unicode_value = ""
                     else
                         return _fail("bad escape char at %d", position + i)
                     end
-                elseif token_substate == 'unicode' then
+                elseif token_substate == 22 then -- unicode
                     if ch:match("%x") then
                         token_unicode_value = token_unicode_value .. ch
                         if token_unicode_value:len() == 4 then
-                            token_substate = 'char'
+                            token_substate = 20 -- char
                             local w = tonumber(token_unicode_value, 16)
                             local utf8 = ""
                             local shift_mask = function(x, disp, mask)
@@ -518,11 +542,11 @@ return function(begin_element_callback, element_callback, end_element_callback, 
                 else
                     assert(false)
                 end
-            elseif token_state == 'number' then
+            elseif token_state == 3 then -- number
                 local succeeded
                 succeeded, reevaluate = _handle_number(ch)
                 if not succeeded then return false end
-            elseif token_state == 'const' then
+            elseif token_state == 4 then -- const
                 token_pos = token_pos + 1
                 if ch == expected_const:sub(token_pos, token_pos) then
                     if token_pos == expected_const:len() then
@@ -531,7 +555,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
                 else
                     return _fail(string.format("expected %s at %d", token_value, position + i))
                 end
-            elseif token_state == 'done' then 
+            elseif token_state == 1 then -- done
                 return true
             end
         
@@ -549,7 +573,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
     -- Should be called when no more data is available. 
     -- The parser will verify that the end of the root object has been received.
     self.finish = function(self, data)
-        if token_state == 'done' then
+        if token_state == 1 then -- done
             return true
         else
             return _fail("incomplete document")
