@@ -38,8 +38,8 @@ return function(status_callback, header_callback, body_callback, done_callback, 
 	package.loaded["uhttp_parser"] = nil
         
     local line = ""
-    local line_state = 'before-lf'
-    local state = 'status-line'
+    local line_state = 0 -- 'before-lf'
+    local state = 0 -- 'status-line'
     local content_length = -1
     local actual_content_length = 0
     local body_leftover = nil
@@ -57,7 +57,7 @@ return function(status_callback, header_callback, body_callback, done_callback, 
         line = nil
         line_state = nil
         -- Mark as completed, so further calls of `process` will do nothing.
-        state = 'done'
+        state = 3 -- 'done'
         body_leftover = nil
     end
 
@@ -78,7 +78,7 @@ return function(status_callback, header_callback, body_callback, done_callback, 
             line = line .. data
             return true
         else
-            return _fail("too long header line")
+            return _fail("long header")
         end
     end
 
@@ -86,7 +86,7 @@ return function(status_callback, header_callback, body_callback, done_callback, 
         if status_callback(self, code, phrase) then
             return true
         else
-            return _fail("status callback failed")
+            return _fail("status")
         end
     end
 
@@ -100,7 +100,7 @@ return function(status_callback, header_callback, body_callback, done_callback, 
             if value == 'chunked' then
                 chunked = true
             else
-                return _fail(string.format("unsupported transfer-encoding: '%s'", value))
+                return _fail("bad transfer-encoding")
             end
         end
 
@@ -108,14 +108,14 @@ return function(status_callback, header_callback, body_callback, done_callback, 
         if header_callback(self, name, value) then
             return true
         else
-            return _fail("header callback failed")
+            return _fail("header")
         end
     end
     
     local chunk_size_string = ''
     local chunk_size = 0
-    local chunk_state = 'size'
-    -- Up to these many bytes will be returned to the body handler in case of chunked document.
+    local chunk_state = 0 -- 'size'
+    -- Up to these many bytes will be returned to the body handler in case of a chunked document.
     local max_bytes_to_grab = 256
     
     local _process_body = function(data)
@@ -126,7 +126,7 @@ return function(status_callback, header_callback, body_callback, done_callback, 
             local len = data:len()
             while i <= len do
             
-                if chunk_state == 'size' then
+                if chunk_state == 0 then -- 'size'
                 
                     -- Expecting the size of the next chunk, a hexadecimal number.
                     local ch = data:sub(i, i)
@@ -137,21 +137,21 @@ return function(status_callback, header_callback, body_callback, done_callback, 
                         if chunk_size_string:len() > 8 then
                             -- Of course there can be leading zeros, but it's weird to have too many  
                             -- and we need a limit anyway.
-                            return _fail(string.format("chunk size string too long: %q", data:sub(i - 8)))
+                            return _fail("long chunk size")
                         end
                     elseif ch == "\r" then
                         if chunk_size_string:len() > 0 then
-                            chunk_state = 'size-lf'
+                            chunk_state = 1 -- 'size-lf'
                         else
                             return _fail("no chunk size")
                         end
                     elseif ch == ';' then
-                        return _fail("chunk extensions not supported")
+                        return _fail("chunk extension")
                     else
-                        return _fail("unexpected char in a chunk header")
+                        return _fail("invalid chunk header")
                     end
                 
-                elseif chunk_state == 'size-lf' then
+                elseif chunk_state == 1 then -- 'size-lf'
                 
                     -- Expecting LF after the chunk size.
                     local ch = data:sub(i, i)
@@ -166,7 +166,7 @@ return function(status_callback, header_callback, body_callback, done_callback, 
                     
                         if chunk_size < 0 then
                             -- Don't let an integer overflow to confuse us.
-                            return _fail("too big chunk size")
+                            return _fail("too big chunk")
                         end
                     
                         if chunk_size == 0 then
@@ -178,33 +178,33 @@ return function(status_callback, header_callback, body_callback, done_callback, 
                             return _done()
                         else
                             -- OK, ready for the body of the chunk.
-                            chunk_state = 'body'
+                            chunk_state = 2 -- 'body'
                         end
                     end
                     
-                elseif chunk_state == 'body-cr' then
+                elseif chunk_state == 3 then -- 'body-cr'
 
                     local ch = data:sub(i, i)
                     i = i + 1
                     
                     if ch == '\r' then
-                        chunk_state = 'body-lf'
+                        chunk_state = 4 -- 'body-lf'
                     else
                         return _fail("expected CR after chunk")
                     end
 
-                elseif chunk_state == 'body-lf' then
+                elseif chunk_state == 4 then -- 'body-lf'
 
                     local ch = data:sub(i, i)
                     i = i + 1
                     
                     if ch == '\n' then
-                        chunk_state = 'size'
+                        chunk_state = 0 -- 'size'
                     else
                         return _fail("expected LF after chunk")
                     end
                 
-                elseif chunk_state == 'body' then
+                elseif chunk_state == 2 then -- 'body'
 
                     repeat
                         
@@ -225,7 +225,7 @@ return function(status_callback, header_callback, body_callback, done_callback, 
                         
                         local actual_data = data:sub(i, i + bytes_to_grab - 1)
                         if not body_callback(self, actual_data) then
-                            return _fail("body callback failed")
+                            return _fail("body")
                         end
                         
                         i = i + bytes_to_grab
@@ -234,14 +234,14 @@ return function(status_callback, header_callback, body_callback, done_callback, 
                         
                         if chunk_size == 0 then
                             -- OK, this chunk is over, need CR/LF afterwards
-                            chunk_state = 'body-cr'
+                            chunk_state = 3 -- 'body-cr'
                             break
                         end
                         
                     until i > data:len()
                     
                 else
-                    return _fail("invalid state")
+					assert(false)
                 end
             end            
         else
@@ -262,7 +262,7 @@ return function(status_callback, header_callback, body_callback, done_callback, 
             actual_content_length = actual_content_length + actual_data:len()            
 
             if not body_callback(self, actual_data) then
-                return _fail("body callback failed")
+                return _fail("body")
             end
 
             if done then
@@ -275,7 +275,7 @@ return function(status_callback, header_callback, body_callback, done_callback, 
 
     local _process_line = function()
 
-        if state == 'status-line' then
+        if state == 0 then -- 'status-line'
     
             -- Status line
             local code, phrase = line:match("^HTTP/1.[01] (%d+) (.+)$")
@@ -285,14 +285,14 @@ return function(status_callback, header_callback, body_callback, done_callback, 
     
             if not _process_status(tonumber(code), phrase) then return false end
     
-            state = 'header'
+            state = 1 -- 'header'
     
-        elseif state == 'header' then
+        elseif state == 1 then -- 'header'
     
             -- Headers
             if line:len() == 0 then
-                line_state = 'body'
-                state = 'body'
+                line_state = 1 -- 'body'
+                state = 2 -- 'body'
                 return true
             else
                 local name, value = line:match("^([^%c ()<>@,;:\\\"{}\255]+):%s*(.+)%s*$")
@@ -305,7 +305,7 @@ return function(status_callback, header_callback, body_callback, done_callback, 
             end
     
         else
-            return _fail("invalid state")
+			assert(false)
         end
 
         line = ""
@@ -317,36 +317,36 @@ return function(status_callback, header_callback, body_callback, done_callback, 
     local process = function(_self, data)
         
         -- Safeguard against the client missing 'error' event.
-        if state == 'done' then return false end
+        if state == 3 then return false end -- 'done'
         
         local i = 1
         local len = data:len()
         while i <= len do
-            if line_state == 'before-lf' then
+            if line_state == 0 then -- 'before-lf'
                 local nl_start, nl_end = data:find("\13", i, true)
                 if nl_start ~= nil then
                     -- Got a CR, append everything before it to our line.
                     if not _append_to_line(data:sub(i, nl_start - 1)) then return false end
-                    line_state = 'lf'
+                    line_state = 2 -- 'lf'
                     i = nl_start + 1
                 else
                     -- No CR till the end of the current data, let's append everything for now and be done with it.
                     return _append_to_line(data:sub(i, len))
                 end
-            elseif line_state == 'lf' then
+            elseif line_state == 2 then -- 'lf'
                 if data:byte(i) == 10 then
                     -- OK, got an LF, let's simply eat it and process what we have got so far.
-                    line_state = 'before-lf'
+                    line_state = 0 -- 'before-lf'
                     i = i + 1
                     if not _process_line() then return false end
                 else
                     -- No LF, let's be strict.
-                    return _fail("expected LF after a CR")
+                    return _fail("no LF after CR")
                 end
-            elseif line_state == 'body' then
+            elseif line_state == 1 then -- 'body'
                 return _process_body(data:sub(i, len))
             else
-                return _fail("invalid line state")
+                assert(false)
             end
         end
 
@@ -356,18 +356,18 @@ return function(status_callback, header_callback, body_callback, done_callback, 
     -- Called when a corresponding connection is closed. Will fail if not everything has been received. 
     local finish = function(_self)
             
-        if state == 'done' then return true end
+        if state == 3 then return true end -- 'done'
 
-        if state ~= 'body' then
-            return _fail("connection closed before got to the body")
+        if state ~= 2 then -- 'body'
+            return _fail("conn closed before body")
         end
 
         if content_length >= 0 and actual_content_length < content_length then
-            return _fail(string.format("connection closed too early (expected %d bytes, got %d)", content_length, actual_content_length))
+            return _fail("conn closed too early")
         end
         
         if chunked and state ~= 'end' then
-            return _fail("connection closed too early (have not seen the zero chunk)")
+            return _fail("conn closed before zero chunk")
         end
 
         body_leftover = ''

@@ -11,16 +11,15 @@ chunks and store only what's needed.
 
 ]]--
 
-return function()
+return function(trace)
 
 	-- Avoid caching of the module on NodeMCU.
 	package.loaded["uhttp_request"] = nil
         
     local socket, handlers, parser
 
-    -- TODO: allow to pass the tracing function to new()?
     local _trace = function(s, ...)
-        print(string.format("uhttp: " .. s, ...))
+		print(string.format("uhttp: " .. s, ...))
     end
     
     local _cleanup = function()
@@ -90,7 +89,7 @@ return function()
 
         socket = net.createConnection(net.TCP, 0)
         socket:on("connection", function(sck)
-            _trace("Sending request...")
+			_trace("Sending request...")
             sck:send(
                 "GET " .. path .. " HTTP/1.1\r\n" ..
                 "Host: " .. host .. "\r\n" ..
@@ -116,25 +115,24 @@ return function()
             if num_chunks_scheduled == 1 then
                 sck:hold()
             end
-            
-            node.task.post(0, function()
-                
-                _trace("Received %d byte(s)", data:len())
-                parser:process(data)
-                
+
+            node.task.post(1, function()
+				
+	            _trace("Received %d byte(s)", data:len())
+	            parser:process(data)
+				
                 num_chunks_scheduled = num_chunks_scheduled - 1
-                
                 if num_chunks_scheduled == 0 then
-                    -- Deferring the call of unhold() seems to be helping to further smooth the load.
-                    node.task.post(0, function()
-                        -- Need to check again, because it is possible that a new chunk has been 
-                        -- scheduled meanwhile.
-                        if num_chunks_scheduled == 0 then
-                            sck:unhold()
-                        end
-                    end)
-                end
-            end)
+		            -- Deferring the call of unhold() seems to be helping to further smooth the load.
+		            node.task.post(0, function()
+		                -- Need to check again, because it is possible that a new chunk has been 
+		                -- scheduled meanwhile.
+		                if num_chunks_scheduled == 0 then
+		                    sck:unhold()
+		                end
+					end)
+				end
+			end)
         end)
         
         socket:on("disconnection", function(sck, error)

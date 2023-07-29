@@ -160,7 +160,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
         -- _trace("%s begin %q", string_for_path(path), type)
         local result = begin_element_callback(self, path, key, type)
         if not result then
-            _fail("begin_element() failed")
+            _fail("begin_element")
         end
         return result
     end
@@ -171,7 +171,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
         local result = element_callback(self, path, key, value, truncated)
         table.remove(path)
         if not result then
-            _fail("element() failed")
+            _fail("element")
         end
         return result
     end
@@ -205,7 +205,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
         table.remove(path)
                     
         if not result then
-            return _fail("end_element() failed")
+            return _fail("end_element")
         end
         
         if not _pop_state() then return false end
@@ -252,7 +252,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
                 stack = stack .. 'D'
                 state = 10 -- dict-key
             else
-                return _fail("missing root dict")
+                return _fail("no root")
             end
         elseif state == 10 then -- dict-key
             if token_type == 'string' then
@@ -261,7 +261,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
             elseif token_type == '}' then
                 if not _end_element() then return false end
             else
-                return _fail("expected a string key, got '%s'", token_type)
+                return _fail("expected a key, got '%s'", token_type)
             end
         elseif state == 11 then -- dict-colon
             if token_type == ':' then
@@ -309,7 +309,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
                 if not _end_element() then return false end
             end
         else
-            return _fail("invalid state: '%s'", state)
+			assert(false)
         end
     
         return true
@@ -324,7 +324,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
             token_value = token_value .. ch
             return true
         else
-            return _fail("too big token")
+            return _fail("big token")
         end
     end
 
@@ -367,7 +367,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
                 if not _append_token_value(ch) then return false end                
             else
                 -- Something else, let's fail because we have only a minus so far.
-                return _fail("unexpected char in a number at %d", position + i)
+                return _fail("invalid number at %d", position + i)
             end
         
         elseif token_substate == 1 then -- dot
@@ -428,7 +428,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
             end
         
         else
-            return _fail("wrong parser state")
+            assert(false)
         end
     
         return true
@@ -507,7 +507,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
                         token_substate = 22 -- unicode
                         token_unicode_value = ""
                     else
-                        return _fail("bad escape char at %d", position + i)
+                        return _fail("bad escape at %d", position + i)
                     end
                 elseif token_substate == 22 then -- unicode
                     if ch:match("%x") then
@@ -576,7 +576,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
         if token_state == 1 then -- done
             return true
         else
-            return _fail("incomplete document")
+            return _fail("incomplete")
         end
     end
     
