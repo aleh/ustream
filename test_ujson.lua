@@ -1,3 +1,4 @@
+bit32 = require('bit32')
 
 local p = require("ujson")(
     function(p, path, key, type) -- begin_element

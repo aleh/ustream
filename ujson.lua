@@ -7,16 +7,16 @@
     Create an instance by calling what's returned by require:
     
     local parser = require("ujson")(begin_element, element, end_element, done, error, max_string_len) 
-	
-	(Note that the previous version returned a table with a single 'new' method accepting a table of parameters, 
-	but I am trying to optimize memory consumption now and thus getting rid of tables.)
-	
-	Parameters are mostly callbacks:
     
-	- 'begin_element' = function(p, path, key, type)
+    (Note that the previous version returned a table with a single 'new' method accepting a table of parameters, 
+    but I am trying to optimize memory consumption now and thus getting rid of tables.)
+    
+    Parameters are mostly callbacks:
+    
+    - 'begin_element' = function(p, path, key, type)
         Called at a start of an array (type == '[') or a dictionary (type == '{'). 
         The `key` and `path` parameters are similar to the ones in the `element` callback.
-		
+        
     - 'element' = function(p, path, key, value, truncated)
         
         Called for every simple value (true, false, null, numbers and strings). 
@@ -29,20 +29,20 @@
                 
         For example, if we have the following JSON document:
             { "test" : [ true, { "test2" : 2 } ] }
-			
+            
         and `element` callback is called for the "test2" key, then the `path` will be this Lua table:
             { "", 2, "test2" }
             
         You can can call p:string_for_path(path) to get a string representation of the path suitable for logging.
         
         For string values 'truncated' tells if the string was actually larger than the value of `max_string_len`
-		parameter (see below).
+        parameter (see below).
     
     - 'end_element' = function(p, path)
         
         Called at the end of an array or a dictionary. 
-		
-		The `path` parameters are similar to the ones in the `element` callback.
+        
+        The `path` parameters are similar to the ones in the `element` callback.
         
     - 'error' = function(p, error)
         
@@ -55,25 +55,25 @@
     - 'max_string_len' = number
     
         This is the maximum length of a single string value that the parser will not truncate. Truncated values will be
-		flagged via `truncated` flag on the `element` callback.
+        flagged via `truncated` flag on the `element` callback.
 
     Every handler should return `true` to indicate that the parsing can continue and `false` to mean that 
-	a parsing error should be triggered.
+    a parsing error should be triggered.
     
     The data is fed via `parser:process(s)` method. The single string parameter is the next piece of the JSON being
-	processed. The method returns `false` in case an error happend while processing this chunk. 
+    processed. The method returns `false` in case an error happend while processing this chunk. 
     
     Note that it is safe to call `process` even after the parsing has failed, it won't call the `error` 
-	callback more than once.
+    callback more than once.
     
     The `parser:finish()` method should be called after all the data is fed.  An error will be triggered if there 
-	is not enough data in the incoming stream to complete the document.
+    is not enough data in the incoming stream to complete the document.
 ]]--
 return function(begin_element_callback, element_callback, end_element_callback, done_callback, error_callback, max_string_len)
-	
+    
     -- Avoid caching of the module on NodeMCU.
-    package.loaded["ujson"] = nil	
-    		
+    package.loaded["ujson"] = nil   
+            
     -- Returning something as self, but for performance reasons using locals for the state.
     local self = {}
                         
@@ -215,27 +215,27 @@ return function(begin_element_callback, element_callback, end_element_callback, 
     
     local _process_token = function(token_type, token_value)
     
-		-- Was using string constants for `state` before, but trying to improve performance and memory consumption
-		-- by using numbers now:
-		--[[ 
-		idle: 0
-		dict-key: 10
-		dict-colon: 11
-		dict-value: 12
-		dict-comma: 13
-		array-element: 20
-		array-comma: 21
-		]]--
-		
-		-- Same for token_state, using numbers now:
-		--[[
-		space: 0
-		done: 1
-		string: 2
-		number: 3
-		const: 4
-		]]--
-		
+        -- Was using string constants for `state` before, but trying to improve performance and memory consumption
+        -- by using numbers now:
+        --[[ 
+        idle: 0
+        dict-key: 10
+        dict-colon: 11
+        dict-value: 12
+        dict-comma: 13
+        array-element: 20
+        array-comma: 21
+        ]]--
+        
+        -- Same for token_state, using numbers now:
+        --[[
+        space: 0
+        done: 1
+        string: 2
+        number: 3
+        const: 4
+        ]]--
+        
         token_state = 0 -- space
     
         --[[
@@ -309,7 +309,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
                 if not _end_element() then return false end
             end
         else
-			assert(false)
+            assert(false)
         end
     
         return true
@@ -340,19 +340,19 @@ return function(begin_element_callback, element_callback, end_element_callback, 
     local _handle_number = function(ch)
     
         -- TODO: check if the token value is too long
-		
-		-- For `token_substate` it's the same story as for `state` and `token_state`, need to switch to using numbers:
-		--[[
-			zero-or-digit: 0
-			dot: 1
-			digit: 2
-			fraction-digit: 3
-			exp-sign: 4
-			exp: 5
-			char: 20
-			escape-char: 21
-			unicode: 22
-		]]--
+        
+        -- For `token_substate` it's the same story as for `state` and `token_state`, need to switch to using numbers:
+        --[[
+            zero-or-digit: 0
+            dot: 1
+            digit: 2
+            fraction-digit: 3
+            exp-sign: 4
+            exp: 5
+            char: 20
+            escape-char: 21
+            unicode: 22
+        ]]--
     
         if token_substate == 0 then -- zero-or-digit
         
@@ -439,11 +439,12 @@ return function(begin_element_callback, element_callback, end_element_callback, 
     self.process = function(self, data)
     
         if token_state == 1 then -- done
-			return false 
-		end
+            return false 
+        end
     
-        local i = 1                
-        while i <= data:len() do
+        local i = 1
+        local data_len = data:len()
+        while i <= data_len do
             local ch = data:sub(i, i)
             local reevaluate = false
             if token_state == 0 then -- space
@@ -565,7 +566,7 @@ return function(begin_element_callback, element_callback, end_element_callback, 
             end
         end
     
-        position = position + data:len()
+        position = position + data_len
     
         return true
     end
